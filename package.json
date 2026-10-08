@@ -42,7 +42,8 @@
     "demo": "node tools/demo-agents.js",
     "icon": "node scripts/make-icon.js",
     "pack": "electron-builder --win --dir",
-    "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked"
+    "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked",
+    "dist:linux": "electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.15",
@@ -91,6 +92,23 @@
       ],
       "icon": "assets/icon.ico",
       "signAndEditExecutable": false
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "executableName": "gcenter",
+      "synopsis": "Claude Code dirige un equipo de modelos de IA gratuitos",
+      "maintainer": "toroc07 <214756457+toroc07@users.noreply.github.com>"
+    },
+    "appImage": {
+      "artifactName": "GCenter-${version}-x86_64.AppImage"
+    },
+    "deb": {
+      "artifactName": "gcenter_${version}_amd64.deb"
     },
     "portable": {
       "artifactName": "GCenter-portable-${version}.exe",
