@@ -110,16 +110,20 @@ su papel. El servidor MCP expone seis herramientas:
 - [Claude Code](https://claude.com/claude-code) instalado y con sesión iniciada
 - Al menos una API key de un [proveedor gratuito](#proveedores-gratuitos)
 
-### Linux
+### Descargas
 
-Descarga el paquete desde [Releases](https://github.com/toroc07/gcenter/releases):
+Todos los paquetes están en [Releases](https://github.com/toroc07/gcenter/releases):
 
-| Paquete | Para quién | Instalación |
+| Paquete | Sistema | Instalación |
 |---|---|---|
+| `GCenter-setup-<versión>.exe` | Windows | Instalador. **El recomendado**: arranca en menos de un segundo |
+| `GCenter-portable-<versión>.exe` | Windows | Sin instalar; se autoextrae y es más lento al abrir |
 | `gcenter_<versión>_amd64.deb` | Ubuntu, Debian y derivadas | `sudo apt install ./gcenter_<versión>_amd64.deb` |
 | `GCenter-<versión>-x86_64.AppImage` | Cualquier distribución, sin instalar | `chmod +x GCenter-*.AppImage && ./GCenter-*.AppImage` |
 
-Claude Code se instala en Linux con su instalador oficial, o con npm:
+### Claude Code en Linux
+
+Se instala con su instalador oficial, o con npm:
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
@@ -149,34 +153,32 @@ Electron, fuérzalo con `node node_modules/electron/install.js`.
 
 ### Generar los paquetes
 
-**Windows**, desde un equipo con Windows:
+Cada sistema compila los suyos:
 
 ```bash
-npm run dist
+npm run dist          # en Windows: instalador y portable
+npm run dist:linux    # en Linux: AppImage y .deb
 ```
 
-Deja en `dist/` un instalador (`GCenter-setup-<versión>.exe`) y una versión
-portable (`GCenter-portable-<versión>.exe`). **Usa el instalador**: arranca en
-menos de un segundo, mientras que el portable se autoextrae y Windows lo escanea
-en cada arranque.
+Los paquetes **solo se pueden generar en su propio sistema**: npm instala
+únicamente el binario de terminal (`node-pty`) de la plataforma en la que se
+ejecuta, así que un paquete de Linux construido en Windows llevaría el binario
+de Windows y no abriría el terminal.
 
-**Linux**, desde un equipo con Linux:
+### Publicar una versión
+
+El workflow [`release.yml`](.github/workflows/release.yml) compila los dos
+sistemas en paralelo, cada uno en su máquina de GitHub Actions, prueba el
+servidor MCP y el terminal **dentro** de cada paquete, y solo si todo pasa crea
+una única Release con los cuatro archivos:
 
 ```bash
-npm run dist:linux
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-Los paquetes de Linux **no se pueden generar desde Windows**: npm solo instala
-el binario de terminal (`node-pty`) de la plataforma en la que se ejecuta, y el
-paquete acabaría llevando el de Windows. Por eso los compila el workflow
-[`linux.yml`](.github/workflows/linux.yml) en una máquina Ubuntu de GitHub
-Actions, que además prueba el servidor MCP y el terminal **dentro** del paquete
-antes de publicarlo:
-
-- **Para publicar una versión**, sube una etiqueta: `git tag v1.0.0 && git push
-  origin v1.0.0`. El AppImage y el `.deb` se adjuntan solos a la Release.
-- **Para probar sin publicar**, lánzalo a mano desde *Actions → Linux → Run
-  workflow* y descarga los paquetes como artefacto.
+Para comprobarlo sin publicar nada, lánzalo a mano desde *Actions → Release →
+Run workflow* y descarga los paquetes como artefactos.
 
 ## Primeros pasos
 
