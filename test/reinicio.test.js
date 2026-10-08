@@ -25,15 +25,24 @@ const { ClaudeSession } = require(process.env.SESION || '../src/main/session');
 const C = { ok: '\x1b[92m✓\x1b[0m', no: '\x1b[91m✕\x1b[0m', d: '\x1b[2m', r: '\x1b[0m' };
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Procesos claude.exe lanzados con la configuracion MCP de GCenter. */
+/** Procesos de Claude lanzados con la configuracion MCP de GCenter. */
 function clauDeGCenter() {
   try {
-    const out = execSync(
-      'powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"Name=\'claude.exe\'\\" | ' +
-      'Where-Object { $_.CommandLine -like \'*GCenter*mcp.json*\' }).ProcessId"',
-      { encoding: 'utf8' }
-    );
-    return out.split(/\s+/).filter(Boolean).map(Number);
+    if (process.platform === 'win32') {
+      const out = execSync(
+        'powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"Name=\'claude.exe\'\\" | ' +
+        'Where-Object { $_.CommandLine -like \'*GCenter*mcp.json*\' }).ProcessId"',
+        { encoding: 'utf8' }
+      );
+      return out.split(/\s+/).filter(Boolean).map(Number);
+    }
+
+    // En Linux la ruta de la config es ~/.config/gcenter/mcp.json
+    const mcp = require('../src/shared/config').MCP_CONFIG_PATH;
+    return execSync('ps -eo pid=,args=', { encoding: 'utf8' })
+      .split('\n')
+      .filter((l) => /\bclaude\b/.test(l) && l.includes(mcp))
+      .map((l) => Number(l.trim().split(/\s+/)[0]));
   } catch (e) {
     return [];
   }

@@ -26,7 +26,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gcenter-home-'));
 
 // Copiamos la config real (llaves incluidas) a un HOME aislado, para que las
 // valoraciones de esta prueba no contaminen las tuyas
-const cfgReal = path.join(process.env.APPDATA, 'GCenter', 'config.json');
+const cfgReal = require('../src/shared/config').CONFIG_PATH;
 const cfg = JSON.parse(fs.readFileSync(cfgReal, 'utf8').replace(/^﻿/, ''));
 cfg.permissionMode = 'acceptEdits';
 fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(cfg));
