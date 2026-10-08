@@ -1,0 +1,134 @@
+name: Release
+
+# Compila GCenter para Windows y Linux, cada uno en su propio sistema, y
+# publica los cuatro paquetes en una sola Release.
+#
+# Cada paquete se compila en la plataforma a la que va destinado porque npm
+# solo instala el binario de terminal (node-pty) de la maquina donde corre: un
+# paquete de Linux construido en Windows llevaria el binario de Windows.
+#
+# - Al subir una etiqueta vX.Y.Z, crea la Release con todos los paquetes.
+# - Desde la pestana Actions se puede lanzar a mano para descargar los
+#   paquetes como artefactos, sin publicar nada.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Empaquetar AppImage y .deb
+        run: npm run dist:linux
+
+      # Las dos piezas que dependen de la plataforma, probadas DENTRO del
+      # paquete, usando el binario de la propia app como runtime de Node
+
+      - name: Prueba del servidor MCP empaquetado
+        run: >
+          node test/mcp.test.js
+          dist/linux-unpacked/gcenter
+          dist/linux-unpacked/resources/app.asar/src/mcp/server.js
+
+      - name: Prueba del terminal empaquetado
+        run: >
+          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/gcenter test/pty.test.js
+          "$PWD/dist/linux-unpacked/resources/app.asar/node_modules/@lydell/node-pty"
+
+      - name: Guardar los paquetes
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcenter-linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Empaquetar instalador y portable
+        run: npm run dist
+
+      # Si el icono y los metadatos no se aplicaron, el .exe saldria con los de
+      # Electron: mejor fallar aqui que publicarlo asi
+      - name: Comprobar icono y metadatos
+        shell: pwsh
+        run: |
+          $vi = (Get-Item dist/win-unpacked/GCenter.exe).VersionInfo
+          Write-Host "ProductName: $($vi.ProductName)"
+          if ($vi.ProductName -ne 'GCenter') { throw 'El ejecutable no lleva los metadatos de GCenter' }
+
+      - name: Prueba del servidor MCP empaquetado
+        run: >
+          node test/mcp.test.js
+          dist/win-unpacked/GCenter.exe
+          dist/win-unpacked/resources/app.asar/src/mcp/server.js
+
+      - name: Prueba del terminal empaquetado
+        run: >
+          ELECTRON_RUN_AS_NODE=1 dist/win-unpacked/GCenter.exe test/pty.test.js
+          "$(pwd -W)/dist/win-unpacked/resources/app.asar/node_modules/@lydell/node-pty"
+
+      - name: Guardar los paquetes
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcenter-windows
+          path: |
+            dist/GCenter-setup-*.exe
+            dist/GCenter-portable-*.exe
+          if-no-files-found: error
+
+  # Una sola Release con todo. Solo se crea cuando ambos sistemas han
+  # compilado y pasado sus pruebas: nunca se publica una version a medias.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar los paquetes
+        uses: actions/download-artifact@v4
+        with:
+          path: paquetes
+          merge-multiple: true
+
+      - name: Publicar la Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -la paquetes
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" paquetes/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" paquetes/* \
+              --title "GCenter $GITHUB_REF_NAME" --generate-notes
+          fi
