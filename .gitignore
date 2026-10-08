@@ -1,0 +1,27 @@
+# Dependencias y builds
+node_modules/
+dist/
+
+# Registros
+*.log
+npm-debug.log*
+
+# Secretos y configuracion local. GCenter guarda sus llaves en
+# %APPDATA%\GCenter, fuera del proyecto, pero por si acaso:
+.env
+.env.*
+
+# Bocetos de diseno de trabajo (locales)
+mockups/
+
+# Claude Code: memoria y ajustes locales del proyecto
+.claude/
+CLAUDE.local.md
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

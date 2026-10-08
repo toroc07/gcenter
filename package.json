@@ -1,0 +1,106 @@
+{
+  "name": "gcenter",
+  "version": "1.0.0",
+  "description": "Terminal de escritorio donde Claude Code dirige un equipo de modelos de IA gratuitos para gastar menos tokens.",
+  "main": "src/main/main.js",
+  "author": "toroc07",
+  "license": "MIT",
+  "private": true,
+  "homepage": "https://github.com/toroc07/gcenter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toroc07/gcenter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/toroc07/gcenter/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "electron",
+    "llm",
+    "agents",
+    "orchestration",
+    "groq",
+    "openrouter",
+    "gemini",
+    "nvidia-nim"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "mcp": "node src/mcp/server.js",
+    "test": "node test/mcp.test.js",
+    "test:guard": "node test/guard.test.js",
+    "test:restart": "node test/reinicio.test.js",
+    "test:delegation": "node test/delegacion-real.test.js",
+    "audit": "node tools/audit-free.js",
+    "probe": "node tools/probe-providers.js",
+    "demo": "node tools/demo-agents.js",
+    "icon": "node scripts/make-icon.js",
+    "pack": "electron-builder --win --dir",
+    "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.toroc07.gcenter",
+    "productName": "GCenter",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "prompts/**/*",
+      "assets/**/*",
+      "package.json",
+      "!**/*.map",
+      "!node_modules/@modelcontextprotocol/sdk/dist/esm/**",
+      "!node_modules/**/{test,tests,examples,docs,.github}/**",
+      "!node_modules/**/*.{md,markdown,txt,ts}"
+    ],
+    "electronLanguages": [
+      "en-US",
+      "es"
+    ],
+    "compression": "maximum",
+    "afterPack": "scripts/after-pack.js",
+    "asarUnpack": [
+      "**/@lydell/**",
+      "prompts/**"
+    ],
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "GCenter-portable-${version}.exe",
+      "unpackDirName": "GCenter"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "GCenter-setup-${version}.exe",
+      "shortcutName": "GCenter"
+    }
+  }
+}

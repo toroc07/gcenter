@@ -1,0 +1,10 @@
+# Fin de linea normalizado en el repositorio, sea cual sea el sistema
+* text=auto eol=lf
+
+# PowerShell en Windows espera CRLF
+*.ps1 text eol=crlf
+
+# Binarios: nunca tocarles los finales de linea
+*.ico binary
+*.png binary
+*.exe binary
