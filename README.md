@@ -4,13 +4,13 @@
 
 **Claude Code dirige. Un equipo de modelos gratuitos ejecuta.**
 
-Terminal de escritorio para Windows donde Claude Code actúa como jefe de proyecto,
+Terminal de escritorio para Windows y Linux donde Claude Code actúa como jefe de proyecto,
 reparte el trabajo entre modelos de IA gratuitos y solo gasta tus tokens en lo
 que de verdad requiere su criterio.
 
 [![CI](https://github.com/toroc07/gcenter/actions/workflows/ci.yml/badge.svg)](https://github.com/toroc07/gcenter/actions/workflows/ci.yml)
 [![Licencia: MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
-![Plataforma](https://img.shields.io/badge/plataforma-Windows-0078D6)
+![Plataforma](https://img.shields.io/badge/plataforma-Windows%20%7C%20Linux-0078D6)
 ![Electron](https://img.shields.io/badge/Electron-44-47848F)
 ![Node](https://img.shields.io/badge/node-%3E%3D18-339933)
 
@@ -105,9 +105,35 @@ su papel. El servidor MCP expone seis herramientas:
 
 ### Requisitos
 
-- Windows 10 u 11 de 64 bits
+- **Windows** 10 u 11 de 64 bits, o **Linux** x64 (Ubuntu 22.04+, Debian 12+ o
+  equivalente)
 - [Claude Code](https://claude.com/claude-code) instalado y con sesión iniciada
 - Al menos una API key de un [proveedor gratuito](#proveedores-gratuitos)
+
+### Linux
+
+Descarga el paquete desde [Releases](https://github.com/toroc07/gcenter/releases):
+
+| Paquete | Para quién | Instalación |
+|---|---|---|
+| `gcenter_<versión>_amd64.deb` | Ubuntu, Debian y derivadas | `sudo apt install ./gcenter_<versión>_amd64.deb` |
+| `GCenter-<versión>-x86_64.AppImage` | Cualquier distribución, sin instalar | `chmod +x GCenter-*.AppImage && ./GCenter-*.AppImage` |
+
+Claude Code se instala en Linux con su instalador oficial, o con npm:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+# o bien
+npm install -g @anthropic-ai/claude-code
+```
+
+GCenter lo busca en `~/.local/bin`, en la carpeta global de npm (incluidas las
+versiones de Node gestionadas con nvm) y en el `PATH`, así que lo encuentra
+aunque lo abras desde el menú de aplicaciones.
+
+> En Ubuntu 24.04 y posteriores, la AppImage puede negarse a arrancar por las
+> restricciones de sandbox del sistema. El `.deb` no tiene ese problema. Ver
+> [Solución de problemas](#solución-de-problemas).
 
 ### Desde el código fuente
 
@@ -121,7 +147,9 @@ npm start
 Necesitas Node.js 18 o superior. Si `npm install` no descarga el binario de
 Electron, fuérzalo con `node node_modules/electron/install.js`.
 
-### Generar el ejecutable
+### Generar los paquetes
+
+**Windows**, desde un equipo con Windows:
 
 ```bash
 npm run dist
@@ -132,10 +160,28 @@ portable (`GCenter-portable-<versión>.exe`). **Usa el instalador**: arranca en
 menos de un segundo, mientras que el portable se autoextrae y Windows lo escanea
 en cada arranque.
 
+**Linux**, desde un equipo con Linux:
+
+```bash
+npm run dist:linux
+```
+
+Los paquetes de Linux **no se pueden generar desde Windows**: npm solo instala
+el binario de terminal (`node-pty`) de la plataforma en la que se ejecuta, y el
+paquete acabaría llevando el de Windows. Por eso los compila el workflow
+[`linux.yml`](.github/workflows/linux.yml) en una máquina Ubuntu de GitHub
+Actions, que además prueba el servidor MCP y el terminal **dentro** del paquete
+antes de publicarlo:
+
+- **Para publicar una versión**, sube una etiqueta: `git tag v1.0.0 && git push
+  origin v1.0.0`. El AppImage y el `.deb` se adjuntan solos a la Release.
+- **Para probar sin publicar**, lánzalo a mano desde *Actions → Linux → Run
+  workflow* y descarga los paquetes como artefacto.
+
 ## Primeros pasos
 
-1. **Abre GCenter desde el Explorador**, no desde un terminal integrado (ver
-   [Solución de problemas](#solución-de-problemas)).
+1. **En Windows, abre GCenter desde el Explorador**, no desde un terminal
+   integrado (ver [Solución de problemas](#solución-de-problemas)).
 2. La primera vez que trabajes en una carpeta, Claude Code te pedirá confirmar
    que confías en ella. Es de una sola vez.
 3. Pulsa el engranaje del panel lateral y pega al menos una API key. **Empieza
@@ -269,6 +315,7 @@ npm test               # prueba de humo del servidor MCP (sin llaves ni tokens)
 | `npm test` | Arranca el servidor MCP y lista sus herramientas | No |
 | `npm run test:guard` | Verifica que los modelos de pago se rechazan | Una llamada gratuita de control |
 | `npm run test:restart` | Reinicia la sesión de Claude y busca procesos huérfanos | No |
+| `node test/pty.test.js` | Comprueba que el pseudo-terminal nativo funciona | No |
 | `npm run test:delegation` | Reparte una calculadora en tres archivos y mide el ahorro | Sí, modelos gratuitos |
 | `node test/supervision.test.js` | Reparto por especialidad, reencaminado y salud | Sí, modelos gratuitos |
 | `node test/all-providers.test.js` | Delegación simultánea a todos los proveedores | Sí, modelos gratuitos |
@@ -352,6 +399,26 @@ reintenta con más margen; mientras piensan, el panel muestra "razonando...".
 Un ejecutable portable se autoextrae y Windows lo verifica en cada arranque. Usa
 el instalador, que no extrae nada. El primer arranque tras instalar también es
 lento porque el antivirus analiza los binarios nuevos; solo ocurre una vez.
+
+</details>
+
+<details>
+<summary><b>Linux: la AppImage no arranca ("SUID sandbox helper binary")</b></summary>
+
+Ubuntu 24.04 y posteriores restringen los espacios de nombres de usuario que usa
+el sandbox de Chromium, y la AppImage no puede configurar el suyo. Lo
+recomendable es instalar el **`.deb`**, que sí lo configura al instalarse. Si
+necesitas la AppImage, puedes lanzarla con `./GCenter-*.AppImage --no-sandbox`,
+sabiendo que así la interfaz se ejecuta sin esa capa de aislamiento.
+
+</details>
+
+<details>
+<summary><b>Linux: "No encuentro Claude Code"</b></summary>
+
+GCenter busca Claude en `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`,
+`/usr/local/bin`, `/usr/bin`, las versiones de Node de nvm y el `PATH`. Si lo
+instalaste en otro sitio, comprueba la ruta con `which claude` desde un terminal.
 
 </details>
 
