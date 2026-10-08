@@ -34,7 +34,7 @@ que de verdad requiere su criterio.
 - [Por qué delegar ahorra tokens](#por-qué-delegar-ahorra-tokens)
 - [Supervisión y relevo](#supervisión-y-relevo)
 - [Uso de la interfaz](#uso-de-la-interfaz)
-- [Desarrollo](#desarrollo)
+- [Contribuir](#contribuir)
 - [Solución de problemas](#solución-de-problemas)
 - [Seguridad y privacidad](#seguridad-y-privacidad)
 - [Licencia](#licencia)
@@ -141,44 +141,8 @@ aunque lo abras desde el menú de aplicaciones.
 
 ### Desde el código fuente
 
-```bash
-git clone https://github.com/toroc07/gcenter.git
-cd gcenter
-npm install
-npm start
-```
-
-Necesitas Node.js 18 o superior. Si `npm install` no descarga el binario de
-Electron, fuérzalo con `node node_modules/electron/install.js`.
-
-### Generar los paquetes
-
-Cada sistema compila los suyos:
-
-```bash
-npm run dist          # en Windows: instalador y portable
-npm run dist:linux    # en Linux: AppImage y .deb
-```
-
-Los paquetes **solo se pueden generar en su propio sistema**: npm instala
-únicamente el binario de terminal (`node-pty`) de la plataforma en la que se
-ejecuta, así que un paquete de Linux construido en Windows llevaría el binario
-de Windows y no abriría el terminal.
-
-### Publicar una versión
-
-El workflow [`release.yml`](.github/workflows/release.yml) compila los dos
-sistemas en paralelo, cada uno en su máquina de GitHub Actions, prueba el
-servidor MCP y el terminal **dentro** de cada paquete, y solo si todo pasa crea
-una única Release con los cuatro archivos:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Para comprobarlo sin publicar nada, lánzalo a mano desde *Actions → Release →
-Run workflow* y descarga los paquetes como artefactos.
+Si prefieres ejecutarlo o compilarlo tú mismo, consulta
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Primeros pasos
 
@@ -240,11 +204,6 @@ Además se descartan los modelos que no sirven para conversar (embeddings, voz,
 vídeo, imagen, OCR, moderación). Lo que no pasa el filtro se rechaza sin llegar
 al proveedor, así que un intento fallido no cuesta nada.
 
-```bash
-npm run audit          # qué hay activo y cuántos modelos son gratuitos
-npm run test:guard     # intenta delegar a modelos de pago y verifica el bloqueo
-```
-
 ## Por qué delegar ahorra tokens
 
 Lo caro de Claude son sus **tokens de salida**: cada línea que teclea. Delegar
@@ -302,59 +261,11 @@ una sesión nueva.
 | `Ctrl+Shift+V` | Pegar |
 | `Ctrl+Shift+R` | Reiniciar la sesión de Claude |
 
-## Desarrollo
+## Contribuir
 
-```bash
-npm run dev            # arranca con las herramientas de desarrollo abiertas
-npm test               # prueba de humo del servidor MCP (sin llaves ni tokens)
-```
-
-<details>
-<summary><b>Pruebas y herramientas de diagnóstico</b></summary>
-
-| Comando | Qué hace | ¿Consume cuota? |
-|---|---|---|
-| `npm test` | Arranca el servidor MCP y lista sus herramientas | No |
-| `npm run test:guard` | Verifica que los modelos de pago se rechazan | Una llamada gratuita de control |
-| `npm run test:restart` | Reinicia la sesión de Claude y busca procesos huérfanos | No |
-| `node test/pty.test.js` | Comprueba que el pseudo-terminal nativo funciona | No |
-| `npm run test:delegation` | Reparte una calculadora en tres archivos y mide el ahorro | Sí, modelos gratuitos |
-| `node test/supervision.test.js` | Reparto por especialidad, reencaminado y salud | Sí, modelos gratuitos |
-| `node test/all-providers.test.js` | Delegación simultánea a todos los proveedores | Sí, modelos gratuitos |
-| `node test/modes.test.js` | Comprueba que cada modo de permisos arranca | No |
-| `npm run audit` | Auditoría de gratuidad por proveedor | No |
-| `npm run probe` | Qué proveedores alcanza tu red, sin llaves | No |
-| `node tools/probe-openrouter.js` | Detecta modelos gratuitos restringidos de OpenRouter | Sí, una petición por modelo |
-| `node tools/explore-catalogs.js [familia]` | Explora catálogos públicos por familia | No |
-| `npm run demo` | Agentes simulados para revisar el panel | No |
-| `npx electron tools/render-screenshot.js` | Regenera la captura del README | No |
-
-</details>
-
-### Estructura del proyecto
-
-```
-src/
-├── main/            proceso principal de Electron
-│   ├── main.js          ventana, IPC y ciclo de vida
-│   ├── session.js       sesión de Claude Code en un pseudo-terminal
-│   ├── bus.js           canal local de telemetría de los agentes
-│   └── claude-locator.js
-├── mcp/             servidor MCP que ejecutan los agentes
-│   ├── server.js        herramientas expuestas a Claude
-│   ├── providers.js     catálogo de proveedores y política de gratuidad
-│   ├── capabilities.js  reparto por especialidad
-│   ├── workspace.js     lectura y escritura confinada al proyecto
-│   ├── health.js        salud del equipo
-│   ├── quality.js       control de calidad de las respuestas
-│   └── feedback.js      valoraciones persistentes
-├── renderer/        interfaz (xterm.js y panel lateral)
-└── shared/          configuración común
-prompts/             prompt que convierte a Claude en orquestador
-scripts/             utilidades de build
-test/                pruebas
-tools/               herramientas de diagnóstico
-```
+Para ejecutar GCenter desde el código, compilar los paquetes, conocer la
+estructura del proyecto o lanzar las pruebas, consulta
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Solución de problemas
 
@@ -372,7 +283,8 @@ limpia.
 <summary><b>Groq falla con "red bloqueada"</b></summary>
 
 Groq rechaza las conexiones desde IPs de VPN. Desactiva la VPN; los demás
-proveedores sí funcionan con ella. Para comprobarlo: `npm run probe`.
+proveedores sí funcionan con ella. En el panel **Equipo** lo verás marcado como
+"tu red lo bloquea".
 
 </details>
 

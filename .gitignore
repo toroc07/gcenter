@@ -14,9 +14,9 @@ npm-debug.log*
 # Bocetos de diseno de trabajo (locales)
 mockups/
 
-# Claude Code: memoria y ajustes locales del proyecto
+# Notas y ajustes locales (*.local.md cubre tambien CLAUDE.local.md)
 .claude/
-CLAUDE.local.md
+*.local.md
 
 # Sistema operativo y editores
 .DS_Store
