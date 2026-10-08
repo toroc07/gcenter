@@ -1,0 +1,745 @@
+/* ══════════════════════════════════════════════════════════════════════
+   GCenter — tema "monocromo"
+
+   Casi todo en blanco sobre negro, y un unico naranja reservado para lo que
+   reclama atencion: un agente que falla, una cuota agotada, una respuesta de
+   mala calidad. Si todo brilla, nada destaca; aqui el color significa algo.
+
+   La interfaz usa la tipografia del sistema y solo el terminal va en
+   monoespaciada, que es lo que evita el aire de panel de nave espacial.
+   ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg:      #141414;
+  --panel:   #161616;
+  --raised:  #1d1d1d;
+  --border:  #2b2b2b;
+  --divider: #232323;
+
+  --text:  #e8e8e8;
+  --dim:   #8c8c8c;
+  --faint: #5a5a5a;
+
+  /* El unico acento. Todo lo que requiera atencion lo usa; nada mas. */
+  --accent:     #ff6b35;
+  --accent-mid: rgba(255, 107, 53, 0.5);
+  --accent-low: rgba(255, 107, 53, 0.12);
+
+  --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+
+  --radius: 2px;
+  --titlebar-h: 36px;
+  --sidebar-w: 312px;
+}
+
+/**
+ * Modo claro. Mismo planteamiento: un solo acento, reservado para lo que
+ * reclama atencion. El naranja se oscurece porque el original no tiene
+ * contraste suficiente sobre fondo blanco.
+ */
+body.light {
+  --bg:      #faf9f7;
+  --panel:   #ffffff;
+  --raised:  #f1efec;
+  --border:  #ddd8d1;
+  --divider: #ebe7e1;
+
+  --text:  #1f1f1f;
+  --dim:   #6b6862;
+  --faint: #9b968d;
+
+  --accent:     #c2410c;
+  --accent-mid: rgba(194, 65, 12, 0.5);
+  --accent-low: rgba(194, 65, 12, 0.09);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ───────────────────────────── Barra de titulo ─────────────────────── */
+
+.titlebar {
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 0 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand-mark { display: none; } /* el monocromo no necesita logotipo decorativo */
+
+.brand-name {
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-size: 13px;
+}
+.brand-name .accent { color: var(--accent); }
+.brand-sub { color: var(--faint); font-size: 11px; }
+
+.titlebar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.dot-off  { background: var(--faint); }
+.dot-on   { background: var(--text); }
+.dot-busy { background: var(--accent); animation: pulse 1.4s infinite; }
+.dot-err  { background: var(--accent); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.3; }
+}
+
+.window-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
+
+.wc {
+  width: 42px;
+  height: var(--titlebar-h);
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-family: var(--ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.wc:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+body.light .wc:hover { background: rgba(0, 0, 0, 0.06); }
+.wc-close:hover { background: #c0392b; color: #fff; }
+
+/* El icono del interruptor gira al cambiar de modo, para que se lea como un
+   conmutador y no como un boton mas de ventana */
+.wc-theme { font-size: 14px; transition: transform 0.25s ease; }
+body.light .wc-theme { transform: rotate(180deg); }
+
+/* ──────────────────────────── Estructura ───────────────────────────── */
+
+.body { display: flex; height: calc(100% - var(--titlebar-h)); }
+
+.terminal-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.term {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 6px 6px 14px;
+  user-select: text;
+}
+
+/* xterm pinta su propio fondo negro. Lo dejamos transparente para que mande el
+   del tema: si no, al pasar a modo claro el texto se vuelve tinta oscura sobre
+   un rectangulo negro y no hay quien lo lea. */
+.xterm,
+.xterm .xterm-viewport,
+.xterm .xterm-screen { background-color: transparent !important; }
+
+/* ───────────────────────── Barra de estado ─────────────────────────── */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 24px;
+  padding: 0 14px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.sb-key { color: var(--faint); }
+.sb-item b { color: var(--dim); font-weight: 600; }
+.sb-sep { width: 1px; height: 11px; background: var(--border); }
+.sb-grow { flex: 1; }
+.sb-hint { color: var(--faint); }
+
+#sbCwd {
+  max-width: 30vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* ────────────────────────────── Sidebar ────────────────────────────── */
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.panel {
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--divider);
+  flex-shrink: 0;
+}
+.panel:last-child { border-bottom: 0; }
+.panel-grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2.4px;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+/* En monocromo las vinetas de color sobran: el titulo ya separa las secciones */
+.bullet { display: none; }
+
+.pill {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.mini-btn {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  transition: color 0.1s, border-color 0.1s;
+}
+.mini-btn:hover { color: var(--accent); border-color: var(--accent-mid); }
+
+/* ───────────────────────── Selector de modelo ──────────────────────── */
+
+.model-list { display: flex; flex-direction: column; gap: 3px; }
+
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.model-item:hover { background: var(--raised); }
+
+.model-item.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--raised);
+}
+
+.model-radio {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--faint);
+  flex-shrink: 0;
+}
+.model-item.active .model-radio { border-color: var(--accent); background: var(--accent); }
+
+.model-name { font-size: 12px; }
+.model-item.active .model-name { color: var(--accent); font-weight: 600; }
+.model-tag { margin-left: auto; font-size: 9.5px; color: var(--faint); }
+
+/* ──────────── Selectores de esfuerzo y modo de permisos ───────────── */
+
+.ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 9px;
+}
+
+.ctrl-row > span {
+  font-size: 9.5px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.ctrl-row select {
+  margin-left: auto;
+  flex: 0 1 130px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ctrl-row select:hover { border-color: var(--dim); }
+.ctrl-row select:focus { outline: 0; border-color: var(--accent-mid); }
+
+/* ────────────────────────── Tarjetas de agente ─────────────────────── */
+
+.agent-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.empty-note {
+  margin: 14px 4px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.7;
+  text-align: center;
+}
+.empty-tight { margin: 4px; font-size: 10px; text-align: left; }
+
+/* Sin cajas: solo una linea vertical y aire. Es lo que hace que el panel
+   respire y que el naranja destaque cuando aparece. */
+.agent-card {
+  position: relative;
+  flex-shrink: 0;
+  padding: 6px 4px 7px 10px;
+  border-left: 2px solid var(--dim);
+  animation: slideIn 0.18s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.agent-card.running { border-left-color: var(--accent); }
+
+.agent-head { display: flex; align-items: center; gap: 7px; }
+
+.agent-status { display: none; } /* la linea lateral ya indica el estado */
+
+.agent-role {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--text);
+  text-transform: uppercase;
+}
+.agent-time { margin-left: auto; font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* Subtitulo: proveedor + modelo concreto que esta usando ese agente */
+.agent-model {
+  margin-top: 2px;
+  font-size: 9.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-model .prov { color: var(--dim); }
+
+.agent-meter {
+  margin-top: 5px;
+  height: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+.agent-meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.25s ease-out;
+}
+
+.agent-foot {
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--faint);
+  display: flex;
+  gap: 8px;
+}
+
+/* Terminado bien: se apaga y se aparta del camino */
+.agent-card.done { border-left-color: var(--border); opacity: 0.65; }
+.agent-card.done:hover { opacity: 1; }
+/* Al completarse, la barra llena queda como un separador discreto en vez de
+   como un indicador que sigue reclamando atencion */
+.agent-card.done .agent-meter > i { background: var(--border); }
+
+/* Requiere atencion: calidad dudosa o error. Aqui SI entra el naranja. */
+.agent-card.poor,
+.agent-card.error { border-left-color: var(--accent); }
+.agent-card.poor .agent-role,
+.agent-card.error .agent-role { color: var(--accent); }
+.agent-card.poor .agent-foot,
+.agent-card.error .agent-foot {
+  color: var(--accent);
+  white-space: normal;
+  line-height: 1.5;
+  display: block;
+}
+
+/* ───────────── Agrupacion cuando un proveedor corre varios ─────────── */
+
+/* Dos modelos del mismo proveedor a la vez no son dos tarjetas: son una sola
+   con un desplegable. Si no, un lote paralelo llena el panel de repeticiones
+   del mismo nombre y cuesta ver de un vistazo cuantos frentes hay abiertos. */
+
+.agent-caret {
+  width: 9px;
+  flex-shrink: 0;
+  color: var(--faint);
+  font-size: 8px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+  cursor: pointer;
+  user-select: none;
+}
+.agent-card.open > .agent-head .agent-caret { transform: rotate(90deg); }
+.agent-card.grouped > .agent-head { cursor: pointer; }
+
+.agent-children {
+  margin: 6px 0 0 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.agent-children[hidden] { display: none; }
+
+.agent-child { padding: 1px 0; }
+
+.child-head { display: flex; align-items: baseline; gap: 6px; }
+
+.child-role {
+  font-size: 9.5px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.child-time { margin-left: auto; font-size: 9px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+.child-model {
+  font-size: 9px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.child-meter { margin-top: 3px; height: 1px; background: var(--border); overflow: hidden; }
+.child-meter > i {
+  display: block; height: 100%; width: 0;
+  background: var(--dim);
+  transition: width 0.25s ease-out;
+}
+
+.agent-child.running .child-role { color: var(--text); }
+.agent-child.running .child-meter > i { background: var(--accent); }
+.agent-child.poor .child-role,
+.agent-child.error .child-role { color: var(--accent); }
+.agent-child.poor .child-model,
+.agent-child.error .child-model { color: var(--accent); white-space: normal; }
+
+/* ─────────────────────── Salud del equipo ──────────────────────────── */
+
+.health-list { display: flex; flex-direction: column; gap: 1px; }
+
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.health-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: var(--dim); }
+.health-sano      .health-dot { background: var(--text); }
+.health-degradado .health-dot { background: var(--accent); animation: pulse 1.6s infinite; }
+.health-agotado   .health-dot { background: var(--accent); }
+.health-inactivo  .health-dot { background: var(--faint); }
+
+.health-name { color: var(--text); }
+.health-inactivo .health-name { color: var(--faint); }
+.health-degradado .health-name,
+.health-agotado .health-name { color: var(--accent); }
+
+.health-meta {
+  margin-left: auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.health-degradado .health-meta,
+.health-agotado   .health-meta { color: var(--accent-mid); }
+
+/* ───────────────────────────── Estadisticas ────────────────────────── */
+
+/* Sin recuadros: la cifra grande y la etiqueta pequena bastan */
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 6px; }
+
+.stat b {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.stat span { font-size: 9px; color: var(--faint); }
+
+/* ────────────────────── Directorio de trabajo ──────────────────────── */
+
+.cwd-current {
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.45;
+  word-break: break-all;
+  max-height: 58px;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.cwd-actions { display: flex; gap: 5px; margin-top: 6px; }
+
+.btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--ui);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.1s, color 0.1s;
+}
+.btn:hover { border-color: var(--dim); color: var(--text); }
+
+.btn-primary { border-color: var(--accent-mid); color: var(--accent); }
+.btn-primary:hover { border-color: var(--accent); background: var(--accent-low); color: var(--accent); }
+
+#btnRecentDir { flex: 0 0 32px; }
+
+.recent-list {
+  margin-top: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.recent-item {
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--dim);
+  cursor: pointer;
+  word-break: break-all;
+  border-bottom: 1px solid var(--divider);
+}
+.recent-item:last-child { border-bottom: 0; }
+.recent-item:hover { background: var(--raised); color: var(--text); }
+
+.cwd-note { margin: 6px 0 0; font-size: 9.5px; color: var(--faint); line-height: 1.5; }
+
+/* ──────────────────────────── Modal ajustes ────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+}
+.overlay[hidden] { display: none; }
+
+.modal {
+  width: min(640px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h3 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 2.4px;
+  color: var(--dim);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.modal-intro {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--dim);
+  border-bottom: 1px solid var(--divider);
+}
+
+.provider-list { overflow-y: auto; padding: 8px 16px; flex: 1; }
+
+.provider { padding: 11px 0; border-bottom: 1px solid var(--divider); }
+.provider:last-child { border-bottom: 0; }
+
+.provider-head { display: flex; align-items: center; gap: 8px; }
+.provider-name { font-size: 12px; font-weight: 600; color: var(--text); }
+
+.provider-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  border: 1px solid currentColor;
+}
+.badge-on  { color: var(--dim); }
+.badge-off { color: var(--faint); }
+
+.provider-link {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.provider-link:hover { text-decoration: underline; }
+
+.provider-meta { margin: 5px 0 8px; font-size: 10px; color: var(--faint); line-height: 1.6; }
+
+.provider-input { display: flex; gap: 6px; }
+
+.provider-input input {
+  flex: 1;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: text;
+}
+.provider-input input:focus { outline: 0; border-color: var(--accent-mid); }
+.provider-input button { flex: 0 0 74px; }
+
+.check-result { margin-top: 6px; font-size: 10px; }
+.check-ok  { color: var(--dim); }
+.check-err { color: var(--accent); }
+
+/* Interruptor de la barrera de gratuidad */
+.guard {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0 16px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.guard:has(input:not(:checked)) { border-color: var(--accent-mid); background: var(--accent-low); }
+
+.guard input { margin-top: 2px; accent-color: var(--dim); flex-shrink: 0; }
+.guard:has(input:not(:checked)) input { accent-color: var(--accent); }
+
+.guard-text { font-size: 10px; color: var(--faint); line-height: 1.6; }
+.guard-text b { display: block; font-size: 11px; color: var(--text); margin-bottom: 2px; }
+.guard:has(input:not(:checked)) .guard-text b { color: var(--accent); }
+.guard-text em { font-style: normal; color: var(--dim); }
+
+.modal-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.field { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.field > span { font-size: 9px; letter-spacing: 1.6px; color: var(--faint); text-transform: uppercase; }
+
+.field select {
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 11px;
+}
+.field select:focus { outline: 0; border-color: var(--accent-mid); }
+
+.modal-foot .btn-primary { flex: 0 0 auto; padding: 7px 16px; }
+
+/* ──────────────────────────── Scrollbars ───────────────────────────── */
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
+  border-radius: 4px;
+  border: 2px solid var(--panel);
+}
+::-webkit-scrollbar-thumb:hover { background: #3d3d3d; }
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { border-color: var(--bg); }
+
+.foot-note { flex: 1; font-size: 10px; color: var(--faint); line-height: 1.5; }

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';" />
+  <title>GCenter</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ───────────────────────── Barra de titulo ───────────────────────── -->
+  <header class="titlebar">
+    <div class="brand">
+      <span class="brand-mark">&#9608;&#9608;</span>
+      <span class="brand-name">G<span class="accent">CENTER</span></span>
+      <span class="brand-sub">orquestador de agentes</span>
+    </div>
+
+    <div class="titlebar-status">
+      <span id="sessionDot" class="dot dot-off"></span>
+      <span id="sessionLabel">desconectado</span>
+    </div>
+
+    <div class="window-controls">
+      <button id="btnTheme" class="wc wc-theme" title="Cambiar entre modo claro y oscuro">&#9681;</button>
+      <button id="btnMin" class="wc" title="Minimizar">&#8211;</button>
+      <button id="btnMax" class="wc" title="Maximizar">&#9633;</button>
+      <button id="btnClose" class="wc wc-close" title="Cerrar">&#10005;</button>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ─────────────────────────── Terminal ─────────────────────────── -->
+    <main class="terminal-pane">
+      <div id="term" class="term"></div>
+
+      <footer class="statusbar">
+        <span class="sb-item"><span class="sb-key">MODELO</span> <b id="sbModel">opus</b></span>
+        <span class="sb-sep"></span>
+        <span class="sb-item"><span class="sb-key">DIR</span> <b id="sbCwd">-</b></span>
+        <span class="sb-sep"></span>
+        <span class="sb-item"><span class="sb-key">AGENTES</span> <b id="sbAgents">0</b></span>
+        <span class="sb-grow"></span>
+        <span class="sb-item sb-hint">Ctrl+Shift+C copiar &nbsp;·&nbsp; Ctrl+Shift+V pegar &nbsp;·&nbsp; Ctrl+Shift+R reiniciar</span>
+      </footer>
+    </main>
+
+    <!-- ─────────────────────────── Sidebar ──────────────────────────── -->
+    <aside class="sidebar">
+
+      <!-- Modelo de Claude Code (el jefe) -->
+      <section class="panel">
+        <h2 class="panel-title">
+          <span class="bullet bullet-cyan"></span>MODELO JEFE
+          <button id="btnSettings" class="mini-btn" title="Ajustes y API keys">&#9881;</button>
+        </h2>
+        <div id="modelList" class="model-list"></div>
+
+        <label class="ctrl-row">
+          <span>Esfuerzo</span>
+          <select id="effortSel">
+            <option value="">Por defecto de Claude</option>
+            <option value="low">Bajo</option>
+            <option value="medium">Medio</option>
+            <option value="high">Alto</option>
+            <option value="xhigh">Muy alto</option>
+            <option value="max">Maximo</option>
+          </select>
+        </label>
+
+        <label class="ctrl-row">
+          <span>Modo</span>
+          <!-- Ordenados de menos a mas permisivo, igual que los ordena Claude -->
+          <select id="modeSel">
+            <option value="plan">Plan</option>
+            <option value="manual">Manual</option>
+            <option value="dontAsk">No preguntar</option>
+            <option value="acceptEdits">Edicion automatica</option>
+            <option value="auto">Auto</option>
+            <option value="bypassPermissions">Sin restricciones</option>
+          </select>
+        </label>
+      </section>
+
+      <!-- Agentes subordinados -->
+      <section class="panel panel-grow">
+        <h2 class="panel-title">
+          <span class="bullet bullet-magenta"></span>AGENTES
+          <span id="agentCount" class="pill">0 activos</span>
+        </h2>
+        <div id="agentList" class="agent-list">
+          <p class="empty-note">
+            Sin actividad todavia.<br />
+            Pidele algo a Claude y delegara aqui.
+          </p>
+        </div>
+      </section>
+
+      <!-- Salud del equipo de agentes -->
+      <section class="panel">
+        <h2 class="panel-title"><span class="bullet bullet-violet"></span>EQUIPO</h2>
+        <div id="healthList" class="health-list">
+          <p class="empty-note empty-tight">Sin delegaciones todavia.</p>
+        </div>
+      </section>
+
+      <!-- Acumulado de la sesion -->
+      <section class="panel">
+        <h2 class="panel-title"><span class="bullet bullet-lime"></span>SESION</h2>
+        <div class="stats">
+          <div class="stat"><b id="stDeleg">0</b><span>delegaciones</span></div>
+          <div class="stat"><b id="stOk">0</b><span>completadas</span></div>
+          <div class="stat"><b id="stFail">0</b><span>fallidas</span></div>
+          <div class="stat"><b id="stTokens">0</b><span>tokens ahorrados</span></div>
+        </div>
+      </section>
+
+      <!-- Directorio de trabajo -->
+      <section class="panel panel-cwd">
+        <h2 class="panel-title"><span class="bullet bullet-amber"></span>DIRECTORIO DE TRABAJO</h2>
+        <div class="cwd-current" id="cwdCurrent" title="">-</div>
+        <div class="cwd-actions">
+          <button id="btnChooseDir" class="btn btn-primary">Cambiar carpeta</button>
+          <button id="btnRecentDir" class="btn" title="Carpetas recientes">&#9662;</button>
+        </div>
+        <div id="recentList" class="recent-list" hidden></div>
+        <p class="cwd-note">Claude ejecutara aqui todas las peticiones.</p>
+      </section>
+
+    </aside>
+  </div>
+
+  <!-- ───────────────────── Modal de ajustes / API keys ───────────────── -->
+  <div id="settingsOverlay" class="overlay" hidden>
+    <div class="modal">
+      <header class="modal-head">
+        <h3>Agentes gratuitos</h3>
+        <button id="btnCloseSettings" class="mini-btn">&#10005;</button>
+      </header>
+
+      <p class="modal-intro">
+        Cada proveedor de abajo es gratuito. Pega su API key y Claude podra delegarle trabajo.
+        Con uno solo ya funciona, pero cuantos mas actives, mejor podra repartir segun la tarea.
+      </p>
+
+      <div id="providerList" class="provider-list"></div>
+
+      <label class="guard" id="freeOnlyRow">
+        <input type="checkbox" id="freeOnly" checked />
+        <span class="guard-text">
+          <b>Solo modelos gratuitos</b>
+          Rechaza cualquier modelo que cobre por token <em>antes</em> de llamar al proveedor.
+          Desactivalo solo si has anadido saldo a proposito.
+        </span>
+      </label>
+
+      <footer class="modal-foot">
+        <span class="foot-note">El modo de permisos se cambia desde el panel lateral.</span>
+        <button id="btnSaveSettings" class="btn btn-primary">Guardar y reiniciar sesion</button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
