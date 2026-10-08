@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # El binario de Electron no hace falta para estas comprobaciones, y
+      # descargarlo son mas de 100 MB en cada ejecucion
+      - name: Instalar dependencias
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Comprobar la sintaxis de todo el codigo
+        run: |
+          for f in $(git ls-files '*.js'); do
+            node --check "$f" || exit 1
+          done
+
+      # Arranca el servidor MCP, hace el handshake y lista las herramientas.
+      # No necesita API keys ni gasta tokens.
+      - name: Prueba de humo del servidor MCP
+        run: npm test
