@@ -23,9 +23,9 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -51,7 +51,7 @@ jobs:
           "$PWD/dist/linux-unpacked/resources/app.asar/node_modules/@lydell/node-pty"
 
       - name: Guardar los paquetes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gcenter-linux
           path: |
@@ -65,9 +65,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -99,7 +99,7 @@ jobs:
           "$(pwd -W)/dist/win-unpacked/resources/app.asar/node_modules/@lydell/node-pty"
 
       - name: Guardar los paquetes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gcenter-windows
           path: |
@@ -115,7 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Descargar los paquetes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: paquetes
           merge-multiple: true

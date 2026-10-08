@@ -41,8 +41,8 @@
     "probe": "node tools/probe-providers.js",
     "demo": "node tools/demo-agents.js",
     "icon": "node scripts/make-icon.js",
-    "pack": "electron-builder --win --dir",
-    "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked",
+    "pack": "electron-builder --win --dir --publish never",
+    "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
