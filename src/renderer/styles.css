@@ -25,8 +25,8 @@
   --accent-mid: rgba(255, 107, 53, 0.5);
   --accent-low: rgba(255, 107, 53, 0.12);
 
-  --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
-  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  --ui: "Segoe UI", system-ui, -apple-system, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace;
 
   --radius: 2px;
   --titlebar-h: 36px;

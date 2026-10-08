@@ -769,6 +769,16 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // El SDK solo escucha datos y errores de stdin, no su cierre. Si Claude
+  // muere sin cerrar bien (un crash, un kill), este proceso seguiria vivo para
+  // siempre, sujeto por la conexion del bus. Que se vaya con su padre.
+  const salir = () => {
+    bus.close();
+    process.exit(0);
+  };
+  process.stdin.on('end', salir);
+  process.stdin.on('close', salir);
   bus.log('servidor MCP listo (pid ' + process.pid + ')');
 }
 

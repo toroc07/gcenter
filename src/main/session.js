@@ -171,7 +171,7 @@ class ClaudeSession {
     if (!bin) {
       this.emit('session:error', {
         message:
-          'No encuentro claude.exe. Instalalo con "npm i -g @anthropic-ai/claude-code" ' +
+          'No encuentro Claude Code. Instalalo con "npm i -g @anthropic-ai/claude-code" ' +
           'o indica su ruta en Ajustes.'
       });
       return false;
@@ -334,7 +334,7 @@ class ClaudeSession {
     this.proc = null;
 
     // Claude lanza a su vez el servidor MCP de GCenter. Matar solo a Claude
-    // puede dejar ese hijo vivo, asi que en Windows tumbamos el arbol entero.
+    // puede dejar ese hijo vivo, asi que tumbamos el arbol entero.
     if (process.platform === 'win32' && proc.pid) {
       try {
         spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
@@ -343,6 +343,14 @@ class ClaudeSession {
         }).on('error', () => {});
       } catch (e) {
         /* si taskkill no esta, nos quedamos con el kill normal */
+      }
+    } else if (proc.pid) {
+      // En Linux el pseudo-terminal arranca a Claude como lider de su propio
+      // grupo de procesos, asi que un pid negativo alcanza a todo el grupo
+      try {
+        process.kill(-proc.pid, 'SIGTERM');
+      } catch (e) {
+        /* el grupo ya no existe */
       }
     }
 

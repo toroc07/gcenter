@@ -98,7 +98,7 @@ const TEMAS = {
 };
 
 const term = new Terminal({
-  fontFamily: '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, monospace',
+  fontFamily: '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace',
   fontSize: 13.5,
   lineHeight: 1.25,
   letterSpacing: 0,
