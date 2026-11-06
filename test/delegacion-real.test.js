@@ -138,20 +138,21 @@ async function main() {
 
   // 5. Las valoraciones cambian el reparto
   const antes = await rpc('tools/call', { name: 'agents_health', arguments: {} });
-  const primero = (texto(antes).match(/codigo\s+cubierta por (.+)/) || [])[1];
-  const [prov, mod] = String(primero || '').split(' / ');
-  const pid = { 'NVIDIA NIM': 'nvidia', 'Groq': 'groq', 'OpenRouter': 'openrouter', 'OpenCode Zen': 'opencode',
-    'Google Gemini': 'gemini', 'Mistral': 'mistral' }[prov];
+  const m1 = texto(antes).match(/codigo\s+cubierta por (.+?) \/ (\S+)\s+\(provider="([^"]+)"\)/) || [];
+  const primero = m1[1] ? m1[1] + ' / ' + m1[2] : null;
+  const mod = m1[2];
+  const pid = m1[3];
   for (let i = 0; i < 3; i++) {
     await rpc('tools/call', { name: 'agents_feedback',
       arguments: { provider: pid, model: mod, rating: 'malo', reason: 'prueba' } });
   }
   const despues = await rpc('tools/call', { name: 'agents_health', arguments: {} });
-  const nuevo = (texto(despues).match(/codigo\s+cubierta por (.+)/) || [])[1];
+  const m2 = texto(despues).match(/codigo\s+cubierta por (.+?) \/ (\S+)/) || [];
+  const nuevo = m2[1] ? m2[1] + ' / ' + m2[2] : null;
   console.log('  ' + (nuevo && nuevo !== primero ? C.ok : C.no) + ' 5. Tras tres "malo", el reparto de codigo pasa de');
   console.log(C.d + '       ' + primero + '\n       a ' + nuevo + C.r);
 
-  console.log('\n' + C.d + '  Respuesta completa que veria Claude:\n' + C.r);
+  console.log('\n' + C.d + '  Respuesta completa que veria el orquestador:\n' + C.r);
   console.log(salida.split('\n').map((l) => '    ' + l).join('\n'));
 
   server.kill();

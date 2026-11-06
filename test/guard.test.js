@@ -7,11 +7,28 @@
  * de llamar al proveedor. Como el bloqueo ocurre antes de la peticion, este
  * test no gasta ni un token ni un centimo.
  *
+ * Usa agentes con llaves FALSAS en una carpeta de configuracion temporal: no
+ * depende de las cuentas de nadie y da el mismo resultado en cualquier equipo.
+ *
  *   node test/guard.test.js
  */
 
+const fs = require('fs');
+const os = require('os');
 const { spawn } = require('child_process');
 const path = require('path');
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gcenter-guard-'));
+fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+  freeOnly: true,
+  agents: [
+    { id: 'openrouter', name: 'OpenRouter', kind: 'openrouter', key: 'sk-or-falsa-de-prueba' },
+    { id: 'mistral', name: 'Mistral', kind: 'mistral', key: 'llave-falsa-de-prueba' },
+    { id: 'gemini', name: 'Gemini', kind: 'gemini', key: 'AIza-falsa-de-prueba' },
+    // Un proveedor propio que no responde: su gratuidad no se puede comprobar
+    { id: 'propio', name: 'Mi proveedor', kind: 'custom', key: 'falsa', baseUrl: 'http://127.0.0.1:9/v1' }
+  ]
+}));
 
 const CASOS_DE_PAGO = [
   { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.5', porque: 'modelo premium de OpenRouter' },
@@ -20,11 +37,13 @@ const CASOS_DE_PAGO = [
   { provider: 'mistral', model: 'codestral-latest', porque: 'Codestral es de pago' },
   { provider: 'gemini', model: 'deep-research-max-preview-04-2026', porque: 'Deep Research es de pago' },
   { provider: 'gemini', model: 'veo-3.1-generate-preview', porque: 'generacion de video, de pago' },
-  { provider: 'gemini', model: 'gemini-3.1-pro-preview', porque: 'Gemini Pro de ultima generacion, fuera del tier gratis' }
+  { provider: 'gemini', model: 'gemini-3.1-pro-preview', porque: 'Gemini Pro de ultima generacion, fuera del tier gratis' },
+  { provider: 'propio', model: 'cualquier-modelo', porque: 'proveedor propio sin precios publicados: no verificable' }
 ];
 
 const server = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'mcp', 'server.js')], {
-  stdio: ['pipe', 'pipe', 'pipe']
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: Object.assign({}, process.env, { GCENTER_HOME: home })
 });
 
 server.stderr.on('data', () => {}); // el log del bus no nos interesa aqui
@@ -99,35 +118,21 @@ async function main() {
   console.log('\n  Resultado: ' + bloqueados + '/' + CASOS_DE_PAGO.length + ' modelos de pago rechazados\n');
 
   // Y ahora uno gratuito, para confirmar que la barrera no bloquea de mas.
-  // Este SI llama al proveedor, pero pidiendo 16 tokens a un modelo gratis.
-  const disponibles = await rpc('tools/call', { name: 'agents_available', arguments: {} });
-  const texto = disponibles.result.content[0].text;
-  const primerModelo = (texto.match(/^ {5}- (.+)$/m) || [])[1];
+  // Mistral Small esta en la lista blanca: debe pasar la barrera y fallar
+  // despues, en el proveedor, porque la llave es falsa. Lo que no puede pasar
+  // es que lo pare la politica de gratuidad.
+  const control = await rpc('tools/call', {
+    name: 'delegate',
+    arguments: { role: 'CONTROL', provider: 'mistral', model: 'mistral-small-latest', prompt: 'hola', max_tokens: 16 }
+  });
+  const t = control.result.content[0].text;
+  const pasa = !t.includes('POLITICA DE GRATUIDAD');
+  console.log('  ' + (pasa ? '\x1b[92m✓ el modelo gratuito SI pasa la barrera\x1b[0m' : '\x1b[91m✕ tambien bloqueo al gratuito\x1b[0m'));
+  console.log('  \x1b[2m(despues falla en el proveedor, como debe: la llave es falsa)\x1b[0m\n');
 
-  if (primerModelo) {
-    const proveedor = (texto.slice(0, texto.indexOf(primerModelo)).match(/provider="(\w+)"/g) || []).pop();
-    const pid = proveedor ? proveedor.match(/"(\w+)"/)[1] : null;
-    if (pid) {
-      console.log('  Control: delegando de verdad a ' + pid + ' / ' + primerModelo + '...');
-      const ok = await rpc('tools/call', {
-        name: 'delegate',
-        arguments: {
-          role: 'CONTROL',
-          provider: pid,
-          model: primerModelo,
-          prompt: 'Responde unicamente con la palabra: FUNCIONA',
-          max_tokens: 64
-        }
-      });
-      const t = ok.result.content[0].text;
-      const paso = !t.includes('FALLO');
-      console.log('  ' + (paso ? '\x1b[92m✓ el modelo gratuito SI pasa\x1b[0m' : '\x1b[91m✕ tambien bloqueo al gratuito\x1b[0m'));
-      console.log('  \x1b[2m' + t.split('\n').slice(0, 5).join('\n  ') + '\x1b[0m\n');
-    }
-  }
-
+  fs.rmSync(home, { recursive: true, force: true });
   server.kill();
-  process.exit(bloqueados === CASOS_DE_PAGO.length ? 0 : 1);
+  process.exit(bloqueados === CASOS_DE_PAGO.length && pasa ? 0 : 1);
 }
 
 main().catch((e) => {

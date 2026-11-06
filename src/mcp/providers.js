@@ -1,13 +1,17 @@
 'use strict';
 
 /**
- * Catalogo de proveedores de IA gratuitos y politica de gratuidad.
+ * Agentes del usuario, plantillas de proveedores conocidos y politica de
+ * gratuidad.
  *
- * Todos exponen (o emulan) la API de OpenAI /chat/completions, asi que un solo
- * cliente los cubre a todos. Lo unico que cambia entre ellos es la baseUrl, la
- * cabecera de autenticacion y como se listan los modelos.
+ * GCenter no trae agentes de serie: cada persona anade los suyos con un nombre
+ * y una API key de SU cuenta. Las PLANTILLAS solo sirven para reconocer a los
+ * proveedores habituales (por el nombre o por el prefijo de la llave) y saber
+ * su URL y que modelos suyos son gratis. Un proveedor que no reconocemos se
+ * puede anadir igual indicando su URL base: basta con que hable la API de
+ * OpenAI (/models y /chat/completions).
  *
- * Dos decisiones importantes viven aqui:
+ * Tres decisiones importantes viven aqui:
  *
  * 1. El catalogo se consulta SIEMPRE en vivo. Los ids de modelo caducan rapido
  *    (la lista gratuita de OpenRouter rota cada pocas semanas), asi que una
@@ -15,9 +19,13 @@
  *    contra modelos que ya no existen. Los `fallbackModels` son solo el ultimo
  *    recurso para cuando el proveedor no responde.
  *
- * 2. Cada proveedor declara que considera gratis. Antes de cada delegacion se
+ * 2. Cada plantilla declara que considera gratis. Antes de cada delegacion se
  *    valida el modelo contra esa politica, para que nadie acabe pagando por
  *    tokens sin haberlo pedido.
+ *
+ * 3. Si la gratuidad de un agente no se puede comprobar (un proveedor
+ *    desconocido que no publica precios), con el filtro de gratuidad activo
+ *    ese agente no recibe trabajo. Es mejor no usarlo que arriesgar un cargo.
  */
 
 /**
@@ -42,13 +50,14 @@ const NON_CHAT = new RegExp(
   'i'
 );
 
-const PROVIDERS = {
+const PLANTILLAS = {
   groq: {
     id: 'groq',
     label: 'Groq',
     color: '#f55036',
     baseUrl: 'https://api.groq.com/openai/v1',
-    keyName: 'GROQ_API_KEY',
+    alias: ['groq'],
+    keyPrefix: 'gsk_',
     signupUrl: 'https://console.groq.com/keys',
     free: 'Gratis sin tarjeta - 30 req/min, 1.000 req/dia',
     strengths: 'Velocidad extrema (~300 tok/s). El mejor para generar codigo, refactors y tareas donde la latencia importa.',
@@ -64,7 +73,8 @@ const PROVIDERS = {
     color: '#4285f4',
     // Google expone una capa compatible con OpenAI sobre la Gemini API
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    keyName: 'GEMINI_API_KEY',
+    alias: ['gemini', 'google', 'google ai', 'ai studio', 'aistudio'],
+    keyPrefix: 'AIza',
     signupUrl: 'https://aistudio.google.com/apikey',
     free: 'Gratis sin tarjeta - ~10-15 req/min (solo modelos Flash y Gemma)',
     strengths: 'Ventana de hasta 1M de tokens. Imbatible para digerir archivos enormes, documentacion larga o repos completos.',
@@ -90,7 +100,8 @@ const PROVIDERS = {
     label: 'OpenRouter',
     color: '#8b5cf6',
     baseUrl: 'https://openrouter.ai/api/v1',
-    keyName: 'OPENROUTER_API_KEY',
+    alias: ['openrouter', 'open router'],
+    keyPrefix: 'sk-or-',
     signupUrl: 'https://openrouter.ai/settings/keys',
     free: 'Gratis - unas 20 variantes :free - 50 req/dia sin creditos',
     strengths: 'Una sola llave para decenas de modelos abiertos. Ideal para lanzar varios especialistas distintos, o el mismo problema a dos modelos, y contrastar.',
@@ -109,7 +120,8 @@ const PROVIDERS = {
     label: 'NVIDIA NIM',
     color: '#76b900',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
-    keyName: 'NVIDIA_API_KEY',
+    alias: ['nvidia', 'nim', 'nvidia nim', 'build.nvidia'],
+    keyPrefix: 'nvapi-',
     signupUrl: 'https://build.nvidia.com/',
     free: 'Gratis sin tarjeta - 1.000 creditos (~1 por llamada), ~40 req/min',
     strengths: 'El catalogo mas variado: Kimi K3, DeepSeek V4, Nemotron Ultra, modelos de vision y especialistas en finanzas, medicina y escritura creativa.',
@@ -126,7 +138,8 @@ const PROVIDERS = {
     label: 'Mistral',
     color: '#ff7000',
     baseUrl: 'https://api.mistral.ai/v1',
-    keyName: 'MISTRAL_API_KEY',
+    // Las llaves de Mistral no tienen prefijo propio: solo se reconoce por el nombre
+    alias: ['mistral', 'mistral ai', 'la plateforme'],
     signupUrl: 'https://console.mistral.ai/api-keys',
     free: 'Gratis - tier Experiment (solo las familias Small y Ministral)',
     strengths: 'Modelos europeos rapidos. Muy buenos en resumen, traduccion y texto estructurado.',
@@ -139,38 +152,161 @@ const PROVIDERS = {
   }
 };
 
-const PROVIDER_IDS = Object.keys(PROVIDERS);
+const KINDS = Object.keys(PLANTILLAS);
 
-function getProvider(id) {
-  const p = PROVIDERS[String(id || '').toLowerCase()];
-  if (!p) {
-    throw new Error(
-      'Proveedor "' + id + '" desconocido. Disponibles: ' + PROVIDER_IDS.join(', ')
-    );
-  }
-  return p;
+/** Colores para agentes de proveedores desconocidos, elegidos por su id. */
+const COLORES_LIBRES = ['#9ca3af', '#a78bfa', '#38bdf8', '#f472b6', '#facc15', '#34d399', '#fb923c'];
+
+function normalizarNombre(s) {
+  return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function listProviders() {
-  return Object.values(PROVIDERS).map((p) => ({
+/**
+ * Reconoce el proveedor de un agente nuevo a partir de su nombre o de su llave.
+ * Devuelve el id de la plantilla, o null si no lo reconoce (entonces hace falta
+ * que el usuario indique la URL base).
+ */
+function detectar(nombre, llave) {
+  const n = normalizarNombre(nombre);
+  if (n) {
+    const palabras = n.split(/[\s\-_/.]+/);
+    for (const p of Object.values(PLANTILLAS)) {
+      if (p.alias.some((a) => n === a || n.startsWith(a + ' ') || palabras.includes(a))) {
+        return p.id;
+      }
+    }
+  }
+
+  const k = String(llave || '').trim();
+  if (k) {
+    // El prefijo mas largo primero, para que uno corto no se adelante a otro
+    // mas especifico que empiece igual
+    const porPrefijo = Object.values(PLANTILLAS)
+      .filter((p) => p.keyPrefix)
+      .sort((a, b) => b.keyPrefix.length - a.keyPrefix.length)
+      .find((p) => k.startsWith(p.keyPrefix));
+    if (porPrefijo) return porPrefijo.id;
+  }
+
+  return null;
+}
+
+/** Convierte un nombre en un id corto y seguro: "Mi Groq #2" -> "mi-groq-2". */
+function slug(nombre) {
+  const base = String(nombre || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  return base || 'agente';
+}
+
+/** Id que no choca con ninguno de los existentes. */
+function idLibre(nombre, existentes) {
+  const usados = new Set(existentes || []);
+  const base = slug(nombre);
+  if (!usados.has(base)) return base;
+  for (let i = 2; ; i++) {
+    if (!usados.has(base + '-' + i)) return base + '-' + i;
+  }
+}
+
+/** Acepta la URL base con o sin barra final, o con el endpoint pegado. */
+function normalizarUrl(url) {
+  return String(url || '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/(chat\/completions|models)$/, '');
+}
+
+/**
+ * Agente completo, listo para usar: la configuracion que guardo el usuario
+ * mezclada con lo que sabemos de su proveedor.
+ */
+function resolverAgente(cfgAgente) {
+  if (!cfgAgente || !cfgAgente.id) return null;
+  const plantilla = PLANTILLAS[cfgAgente.kind];
+  const id = String(cfgAgente.id);
+
+  if (plantilla) {
+    return Object.assign({}, plantilla, {
+      id,
+      kind: plantilla.id,
+      label: cfgAgente.name || plantilla.label,
+      providerLabel: plantilla.label,
+      key: String(cfgAgente.key || '').trim(),
+      custom: false
+    });
+  }
+
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const baseUrl = normalizarUrl(cfgAgente.baseUrl);
+
+  return {
+    id,
+    kind: 'custom',
+    label: cfgAgente.name || id,
+    providerLabel: 'Proveedor propio',
+    color: COLORES_LIBRES[h % COLORES_LIBRES.length],
+    key: String(cfgAgente.key || '').trim(),
+    baseUrl,
+    signupUrl: baseUrl,
+    free: 'Proveedor anadido a mano',
+    strengths: 'Proveedor compatible con OpenAI anadido por el usuario.',
+    // Gratis solo si su catalogo publica precios y el modelo cuesta cero
+    freePolicy: { mode: 'auto' },
+    fallbackModels: [],
+    custom: true
+  };
+}
+
+/** Todos los agentes que el usuario ha configurado, ya resueltos. */
+function listAgents() {
+  return require('../shared/config').load().agents.map(resolverAgente).filter(Boolean);
+}
+
+/** Un agente por id. Lanza si no existe, con la lista de los que si. */
+function getAgent(id) {
+  const agentes = listAgents();
+  const a = agentes.find((x) => x.id === String(id || '').trim());
+  if (!a) {
+    throw new Error(
+      'Agente "' + id + '" desconocido. ' +
+      (agentes.length
+        ? 'Configurados: ' + agentes.map((x) => x.id).join(', ') + '.'
+        : 'El usuario no tiene ningun agente configurado.')
+    );
+  }
+  return a;
+}
+
+/** Plantillas para la interfaz: que proveedores se reconocen solos. */
+function listPlantillas() {
+  return Object.values(PLANTILLAS).map((p) => ({
     id: p.id,
     label: p.label,
     color: p.color,
-    keyName: p.keyName,
     signupUrl: p.signupUrl,
     free: p.free,
-    strengths: p.strengths
+    keyPrefix: p.keyPrefix || ''
   }));
 }
 
-function authHeaders(provider, apiKey) {
+function authHeaders(agent) {
   return Object.assign(
     {
       'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + apiKey
+      Authorization: 'Bearer ' + agent.key
     },
-    provider.extraHeaders || {}
+    agent.extraHeaders || {}
   );
+}
+
+function filtroGratisActivo() {
+  return require('../shared/config').load().freeOnly !== false;
 }
 
 /* ------------------------------------------------------------------ *
@@ -178,22 +314,24 @@ function authHeaders(provider, apiKey) {
  * ------------------------------------------------------------------ */
 
 const CATALOG_TTL_MS = 10 * 60 * 1000;
-const catalogCache = new Map(); // providerId -> { at, result }
+// agentId -> { at, ok, error, raw }. Se guarda el listado en crudo y el filtro
+// se aplica en cada consulta: asi activar o desactivar el filtro de gratuidad
+// surte efecto al momento, sin esperar a que caduque la cache.
+const catalogCache = new Map();
 
 /**
  * Modelos que el catalogo anuncia pero que al usarlos resulta que estan
  * restringidos (OpenRouter reserva algunos de sus modelos gratuitos a
  * aplicaciones de su directorio, y no lo indica en ningun campo). Cuando uno
- * nos rechaza asi, lo apuntamos y dejamos de ofrecerlo en esta sesion.
+ * nos rechaza asi, lo apuntamos y dejamos de ofrecerlo.
  */
 const restringidos = new Set(require('../shared/config').load().restrictedModels || []);
 
-function marcarRestringido(providerId, model) {
-  const clave = providerId + '|' + model;
+function marcarRestringido(agentId, model) {
+  const clave = agentId + '|' + model;
   if (restringidos.has(clave)) return;
 
   restringidos.add(clave);
-  catalogCache.delete(providerId); // que el proximo listado ya no lo incluya
 
   // Lo recordamos entre sesiones: si no, cada arranque vuelve a tropezar con
   // el mismo modelo restringido y gasta una delegacion en descubrirlo
@@ -204,70 +342,126 @@ function marcarRestringido(providerId, model) {
   }
 }
 
-function estaRestringido(providerId, model) {
-  return restringidos.has(providerId + '|' + model);
+function estaRestringido(agentId, model) {
+  return restringidos.has(agentId + '|' + model);
 }
 
 /**
- * Pide al proveedor su catalogo y devuelve solo los modelos que son gratis y
- * sirven para chatear. `raw` trae el listado completo por si hace falta
- * explicar que se ha descartado.
+ * La politica 'auto' (proveedores anadidos a mano) solo puede verificar la
+ * gratuidad si el catalogo publica precios. Si ningun modelo trae `pricing`,
+ * no hay forma de saber si cobra.
  */
-async function fetchModels(providerId, apiKey, opts) {
+function publicaPrecios(raw) {
+  return raw.some((m) => m && m.pricing && m.pricing.prompt !== undefined);
+}
+
+/** Si la gratuidad de este agente se puede comprobar con su catalogo. */
+function gratuidadVerificable(agent, raw) {
+  if (agent.freePolicy.mode !== 'auto') return true;
+  return publicaPrecios(raw || []);
+}
+
+/** Pide el catalogo al proveedor (o lo saca de la cache). */
+async function catalogoCrudo(agent, opts) {
   const options = opts || {};
-  const timeoutMs = options.timeoutMs || 20000;
-  const provider = getProvider(providerId);
+  const cached = catalogCache.get(agent.id);
+  if (!options.force && cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached;
 
-  if (!apiKey) {
-    return { ok: false, error: 'sin API key', models: provider.fallbackModels, raw: [] };
-  }
-
-  const cached = catalogCache.get(providerId);
-  if (!options.force && cached && Date.now() - cached.at < CATALOG_TTL_MS) {
-    return cached.result;
-  }
-
-  const url = provider.baseUrl + '/models';
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 20000);
 
+  let entrada;
   try {
-    const res = await fetch(url, { headers: authHeaders(provider, apiKey), signal: ctrl.signal });
+    const res = await fetch(agent.baseUrl + '/models', { headers: authHeaders(agent), signal: ctrl.signal });
     if (!res.ok) {
-      return { ok: false, error: 'HTTP ' + res.status, models: provider.fallbackModels, raw: [] };
+      entrada = {
+        ok: false,
+        error: res.status === 401 ? 'llave invalida (HTTP 401)' : 'HTTP ' + res.status,
+        raw: []
+      };
+    } else {
+      const json = await res.json();
+      const lista = Array.isArray(json) ? json : json.data || json.models || [];
+      const raw = lista.map((m) =>
+        Object.assign({}, m, {
+          id: agent.normalizeModelId ? agent.normalizeModelId(m.id || m.name) : String(m.id || m.name || '')
+        })
+      );
+      entrada = { ok: true, raw };
     }
-
-    const json = await res.json();
-    const raw = (json.data || []).map((m) =>
-      Object.assign({}, m, {
-        id: provider.normalizeModelId ? provider.normalizeModelId(m.id) : m.id
-      })
-    );
-
-    const models = raw
-      .filter((m) => isFreeEntry(provider, m))
-      .map((m) => m.id)
-      .filter((id) => !estaRestringido(providerId, id))
-      .sort(byFreshness);
-
-    const result = {
-      ok: true,
-      models: models.length ? models : provider.fallbackModels,
-      raw,
-      totalSeen: raw.length
-    };
-    catalogCache.set(providerId, { at: Date.now(), result });
-    return result;
   } catch (err) {
-    return {
-      ok: false,
-      error: err.name === 'AbortError' ? 'timeout' : err.message,
-      models: provider.fallbackModels,
-      raw: []
-    };
+    // "fetch failed" no le dice nada a nadie: casi siempre es una URL mal
+    // escrita, un servidor caido o la red cortada
+    const error = err.name === 'AbortError'
+      ? 'no respondio a tiempo'
+      : /fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(String(err.message) + String(err.cause && err.cause.code))
+        ? 'no se pudo conectar con ' + agent.baseUrl
+        : err.message;
+    entrada = { ok: false, error, raw: [] };
   } finally {
     clearTimeout(timer);
   }
+
+  entrada.at = Date.now();
+  // Los fallos no se guardan: el siguiente intento vuelve a preguntar
+  if (entrada.ok) catalogCache.set(agent.id, entrada);
+  return entrada;
+}
+
+/**
+ * Modelos que este agente puede usar ahora mismo.
+ *
+ * Con el filtro de gratuidad activo, solo los gratuitos verificados; sin el,
+ * todos los de chat. `bloqueado` indica que el filtro deja al agente sin
+ * ningun modelo porque su gratuidad no se puede comprobar.
+ */
+async function fetchModels(agent, opts) {
+  const options = opts || {};
+  const soloGratis = options.freeOnly !== undefined ? options.freeOnly : filtroGratisActivo();
+
+  if (!agent.key) {
+    return { ok: false, error: 'sin API key', models: [], raw: [], freeCount: 0, verificable: true };
+  }
+  if (!agent.baseUrl) {
+    return { ok: false, error: 'sin URL base', models: [], raw: [], freeCount: 0, verificable: true };
+  }
+
+  const cat = await catalogoCrudo(agent, options);
+  if (!cat.ok) {
+    return {
+      ok: false,
+      error: cat.error,
+      models: agent.fallbackModels.slice(),
+      raw: [],
+      freeCount: 0,
+      verificable: true
+    };
+  }
+
+  const verificable = gratuidadVerificable(agent, cat.raw);
+  const vivos = (m) => m.id && !NON_CHAT.test(m.id) && !estaRestringido(agent.id, m.id);
+
+  const gratis = verificable
+    ? cat.raw.filter((m) => vivos(m) && isFreeEntry(agent, m, cat.raw)).map((m) => m.id).sort(byFreshness)
+    : [];
+  const todos = cat.raw.filter(vivos).map((m) => m.id).sort(byFreshness);
+
+  let models;
+  if (soloGratis) {
+    models = gratis.length || !verificable ? gratis : agent.fallbackModels.slice();
+  } else {
+    models = todos.length ? todos : agent.fallbackModels.slice();
+  }
+
+  return {
+    ok: true,
+    models,
+    raw: cat.raw,
+    totalSeen: cat.raw.length,
+    freeCount: gratis.length,
+    verificable,
+    bloqueado: soloGratis && !verificable
+  };
 }
 
 /**
@@ -288,13 +482,14 @@ function byFreshness(a, b) {
 }
 
 /** Decide si una entrada del catalogo es gratis y chateable. */
-function isFreeEntry(provider, entry) {
+function isFreeEntry(agent, entry, raw) {
   const id = String(entry.id || '');
   if (!id || NON_CHAT.test(id)) return false;
 
-  const policy = provider.freePolicy;
+  const policy = agent.freePolicy;
 
-  if (policy.mode === 'pricing') {
+  if (policy.mode === 'pricing' || policy.mode === 'auto') {
+    if (policy.mode === 'auto' && raw && !publicaPrecios(raw)) return false;
     const pr = entry.pricing;
     if (!pr) return false;
     return Number(pr.prompt) === 0 && Number(pr.completion) === 0;
@@ -317,15 +512,14 @@ function pasaListaBlanca(policy, id) {
  * Comprueba que un modelo concreto se puede usar sin pagar.
  * Devuelve `{ ok }` o `{ ok: false, reason, alternatives }`.
  */
-async function checkFree(providerId, model, apiKey) {
-  const provider = getProvider(providerId);
+async function checkFree(agent, model) {
   const id = String(model || '');
 
-  if (estaRestringido(providerId, id)) {
-    const catalog = await fetchModels(providerId, apiKey);
+  if (estaRestringido(agent.id, id)) {
+    const catalog = await fetchModels(agent, { freeOnly: true });
     return {
       ok: false,
-      reason: 'ese modelo esta restringido por ' + provider.label + ' y ya fallo antes',
+      reason: 'ese modelo esta restringido por ' + agent.label + ' y ya fallo antes',
       alternatives: catalog.models.slice(0, 12)
     };
   }
@@ -339,23 +533,32 @@ async function checkFree(providerId, model, apiKey) {
   }
 
   // Para politicas por patron basta con el patron: no hace falta ni red
-  if (provider.freePolicy.mode === 'allow' && pasaListaBlanca(provider.freePolicy, id)) {
+  if (agent.freePolicy.mode === 'allow' && pasaListaBlanca(agent.freePolicy, id)) {
     return { ok: true };
   }
-  if (provider.freePolicy.mode === 'all') {
+  if (agent.freePolicy.mode === 'all') {
     return { ok: true };
   }
 
   // El resto se decide contra el catalogo en vivo
-  const catalog = await fetchModels(providerId, apiKey);
+  const catalog = await fetchModels(agent, { freeOnly: true });
+  if (catalog.ok && !catalog.verificable) {
+    return {
+      ok: false,
+      reason:
+        'no se puede comprobar si ' + agent.label + ' cobra por ese modelo (su catalogo no publica ' +
+        'precios). Con el filtro de gratuidad activo, este agente no se usa',
+      alternatives: []
+    };
+  }
   if (catalog.models.includes(id)) return { ok: true };
 
   return {
     ok: false,
     reason:
-      provider.freePolicy.mode === 'pricing'
-        ? 'ese modelo de ' + provider.label + ' cobra por token'
-        : 'ese modelo de ' + provider.label + ' no esta en el tier gratuito',
+      agent.freePolicy.mode === 'allow'
+        ? 'ese modelo de ' + agent.label + ' no esta en el tier gratuito'
+        : 'ese modelo de ' + agent.label + ' cobra por token',
     alternatives: catalog.models.slice(0, 12)
   };
 }
@@ -377,8 +580,7 @@ function sleep(ms) {
  */
 async function chat(opts) {
   const {
-    providerId,
-    apiKey,
+    agent,
     model,
     system,
     prompt,
@@ -388,11 +590,12 @@ async function chat(opts) {
     onDelta
   } = opts;
 
-  const provider = getProvider(providerId);
-  if (!apiKey) {
+  // `provider` sigue siendo el nombre que usan los mensajes de error de abajo
+  const provider = agent;
+  if (!agent || !agent.key) {
     throw new Error(
-      'Falta la API key de ' + provider.label + '. Consiguela gratis en ' + provider.signupUrl +
-      ' y pegala en Ajustes de GCenter (o exporta ' + provider.keyName + ').'
+      'LLAVE INVALIDA: el agente ' + (agent ? agent.label : '?') + ' no tiene API key. ' +
+      'Anadela en la ventana de agentes de GCenter.'
     );
   }
 
@@ -407,9 +610,9 @@ async function chat(opts) {
   /** Hace UNA peticion y consume su stream. No lanza por codigos de error. */
   async function once(useModel, budget) {
     const post = (extras) =>
-      fetch(provider.baseUrl + '/chat/completions', {
+      fetch(agent.baseUrl + '/chat/completions', {
         method: 'POST',
-        headers: authHeaders(provider, apiKey),
+        headers: authHeaders(agent),
         signal: ctrl.signal,
         body: JSON.stringify(
           Object.assign(
@@ -484,7 +687,7 @@ async function chat(opts) {
       // El sustituto que propone el proveedor tambien tiene que ser gratis:
       // seguir su recomendacion a ciegas seria saltarse la barrera
       const swapOk = candidate && candidate !== model &&
-        (await checkFree(provider.id, candidate, apiKey)).ok;
+        (!filtroGratisActivo() || (await checkFree(agent, candidate)).ok);
 
       if (swapOk) {
         usedModel = candidate;
@@ -598,7 +801,7 @@ async function chat(opts) {
       finishReason: r.finishReason,
       usage: r.usage || {},
       elapsedMs: Date.now() - startedAt,
-      provider: provider.id,
+      provider: agent.id,
       model: usedModel,
       // Avisamos si acabamos usando otro modelo, para que se vea en el sidebar
       substituted: usedModel !== model ? model : null
@@ -640,12 +843,20 @@ async function* iterateSSE(body) {
 }
 
 module.exports = {
-  PROVIDERS,
-  PROVIDER_IDS,
+  PLANTILLAS,
+  KINDS,
   NON_CHAT,
-  listProviders,
-  getProvider,
+  detectar,
+  idLibre,
+  normalizarUrl,
+  resolverAgente,
+  listAgents,
+  getAgent,
+  listPlantillas,
   fetchModels,
   checkFree,
-  chat
+  byFreshness,
+  chat,
+  // Para las pruebas
+  _catalogCache: catalogCache
 };

@@ -20,13 +20,13 @@ const config = require('../src/shared/config');
 const C = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[92m', red: '\x1b[91m', yellow: '\x1b[93m' };
 
 (async () => {
-  const key = config.apiKeyFor('openrouter', 'OPENROUTER_API_KEY');
-  if (!key) {
-    console.error('No hay API key de OpenRouter configurada.');
+  const agente = providers.listAgents().find((a) => a.kind === 'openrouter');
+  if (!agente) {
+    console.error('No hay ningun agente de OpenRouter configurado.');
     process.exit(1);
   }
 
-  const catalog = await providers.fetchModels('openrouter', key, { force: true });
+  const catalog = await providers.fetchModels(agente, { force: true, freeOnly: true });
   if (!catalog.ok) {
     console.error('No pude listar el catalogo:', catalog.error);
     process.exit(1);
@@ -45,8 +45,7 @@ const C = { reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m', green: '\x1b[92m'
     process.stdout.write('  ' + C.dim + model.padEnd(48) + C.reset);
     try {
       await providers.chat({
-        providerId: 'openrouter',
-        apiKey: key,
+        agent: agente,
         model,
         prompt: 'hola',
         maxTokens: 64,

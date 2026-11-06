@@ -59,17 +59,15 @@ async function main() {
   line(C.dim + '  Solo se listan modelos; no se genera ningun token.' + C.reset);
   line('');
 
-  for (const p of providers.listProviders()) {
-    const key = config.apiKeyFor(p.id, p.keyName);
+  const agentes = providers.listAgents();
+  if (!agentes.length) line(C.dim + '  ○ no hay agentes configurados' + C.reset);
 
-    if (!key) {
-      line(C.dim + '  ○ ' + p.label.padEnd(16) + ' sin llave, no se usara' + C.reset);
-      continue;
-    }
+  for (const p of agentes) {
+    const key = p.key;
 
     process.stdout.write('  · ' + p.label.padEnd(16) + ' comprobando...');
 
-    if (p.id === 'openrouter') {
+    if (p.kind === 'openrouter') {
       const r = await auditOpenRouter(key);
       process.stdout.write('\r');
       if (r.error) {
@@ -90,7 +88,7 @@ async function main() {
       continue;
     }
 
-    const r = await providers.fetchModels(p.id, key, { timeoutMs: 20000 });
+    const r = await providers.fetchModels(p, { timeoutMs: 20000, freeOnly: true });
     process.stdout.write('\r');
 
     if (!r.ok) {
@@ -99,7 +97,12 @@ async function main() {
       continue;
     }
 
-    line(C.green + '  ✓ ' + p.label.padEnd(16) + C.reset + ' ' + r.models.length + ' modelos accesibles');
+    if (r.bloqueado) {
+      line(C.yellow + '  ! ' + p.label.padEnd(16) + C.reset + ' no publica precios: gratuidad no verificable, ' +
+        'bloqueado mientras el filtro este activo');
+      continue;
+    }
+    line(C.green + '  ✓ ' + p.label.padEnd(16) + C.reset + ' ' + r.freeCount + ' modelos gratis de ' + r.totalSeen);
     line(C.dim + '      ejemplos: ' + r.models.slice(0, 4).join(', ') + C.reset);
   }
 

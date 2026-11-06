@@ -3,12 +3,13 @@
 /**
  * Servidor MCP de GCenter.
  *
- * Es el brazo ejecutor del jefe: Claude Code llama a estas herramientas para
- * repartir trabajo entre modelos gratuitos, y cada llamada emite telemetria al
- * sidebar para que se vea quien esta trabajando y con que modelo.
+ * Es el brazo ejecutor del orquestador (Claude Code u OpenCode): llama a estas
+ * herramientas para repartir trabajo entre los agentes que el usuario haya
+ * configurado, y cada llamada emite telemetria al sidebar para que se vea quien
+ * esta trabajando y con que modelo.
  *
- * Ninguna delegacion sale de aqui sin pasar antes por la politica de
- * gratuidad de cada proveedor.
+ * Con el filtro de gratuidad activo, ninguna delegacion sale de aqui sin pasar
+ * antes por la politica de gratuidad del agente.
  */
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
@@ -24,7 +25,13 @@ const feedback = require('./feedback');
 const bus = require('./bus-client');
 const config = require('../shared/config');
 
-const PROVIDER_IDS = providers.PROVIDER_IDS;
+/** Nombre del orquestador, para que los avisos digan a quien le toca. */
+const JEFE = process.env.GCENTER_ORCHESTRATOR || 'el orquestador';
+
+/** Ids de los agentes configurados. Se leen en cada uso: son baratos. */
+function agentIds() {
+  return providers.listAgents().map((a) => a.id);
+}
 
 // Agentes vivos ahora mismo, por id
 const running = new Map();
@@ -41,29 +48,24 @@ function emitStats() {
   bus.send({ type: 'stats', stats: Object.assign({}, stats) });
 }
 
-/**
- * Ejecuta una tarea en un agente subordinado y va reportando su estado.
- * Nunca lanza: devuelve siempre un objeto con `ok` para que un fallo de un
- * agente no tumbe a los demas de un lote paralelo.
- */
 /** Avisa al sidebar del estado del equipo tras cada delegacion. */
 function emitHealth() {
-  bus.send({ type: 'health', proveedores: health.resumen(PROVIDER_IDS) });
+  bus.send({ type: 'health', proveedores: health.resumen(agentIds()) });
 }
 
 /**
  * Decide quien hace la tarea.
  *
  * Si vienen `provider` y `model` se respetan. Si en su lugar viene una
- * `capability`, se busca el mejor proveedor vivo para esa especialidad, y si no
- * queda ninguno se devuelve null: esa es la senal de que le toca a Claude.
+ * `capability`, se busca el mejor agente vivo para esa especialidad, y si no
+ * queda ninguno se devuelve null: esa es la senal de que le toca al orquestador.
  */
 async function elegirEjecutor(task) {
   // Ya asignado por el reparto de un lote paralelo
   if (task.asignado) return task.asignado;
 
   if (task.provider && task.model) {
-    return { provider: String(task.provider).toLowerCase(), model: task.model };
+    return { provider: String(task.provider).trim(), model: task.model };
   }
   if (task.capability) {
     const lista = await capabilities.candidatos(task.capability, {
@@ -83,6 +85,11 @@ async function elegirEjecutor(task) {
   throw new Error('Hay que indicar provider+model, o bien capability.');
 }
 
+/**
+ * Ejecuta una tarea en un agente subordinado y va reportando su estado.
+ * Nunca lanza: devuelve siempre un objeto con `ok` para que un fallo de un
+ * agente no tumbe a los demas de un lote paralelo.
+ */
 async function runAgent(task, opts) {
   const cfg = config.load();
   const id = nextId();
@@ -112,7 +119,9 @@ async function runAgent(task, opts) {
       sinAgentes: true,
       error:
         'SIN AGENTES DISPONIBLES para la capacidad "' + task.capability + '". ' +
-        'Todos los proveedores aptos estan agotados o degradados. ' +
+        (agentIds().length
+          ? 'Todos los agentes aptos estan agotados, degradados o bloqueados por el filtro de gratuidad. '
+          : 'El usuario no ha configurado ningun agente. ') +
         'HAZLO TU MISMO y sigue adelante con el proyecto; no bloquees el trabajo esperando. ' +
         'Capacidades actualmente sin cubrir: ' + (sinCubrir.join(', ') || 'ninguna mas') + '.'
     };
@@ -121,24 +130,23 @@ async function runAgent(task, opts) {
   const providerId = elegido.provider;
   const model = elegido.model;
 
-  let providerMeta;
+  let agent;
   try {
-    providerMeta = providers.getProvider(providerId);
+    agent = providers.getAgent(providerId);
   } catch (err) {
     return { ok: false, id, role, provider: providerId, model, error: err.message };
   }
-
-  const apiKey = config.apiKeyFor(providerId, providerMeta.keyName);
+  const providerMeta = agent;
 
   // Barrera de gratuidad: se comprueba ANTES de crear la tarjeta en el sidebar,
   // para que un modelo de pago ni siquiera llegue a parecer que se ejecuto
   if (cfg.freeOnly !== false) {
-    const verdict = await providers.checkFree(providerId, model, apiKey);
+    const verdict = await providers.checkFree(agent, model);
     if (!verdict.ok) {
       stats.failed += 1;
       emitStats();
       const alt = verdict.alternatives && verdict.alternatives.length
-        ? ' Modelos gratuitos de ' + providerMeta.label + ' ahora mismo: ' + verdict.alternatives.join(', ') + '.'
+        ? ' Modelos gratuitos de ' + agent.label + ' ahora mismo: ' + verdict.alternatives.join(', ') + '.'
         : ' Llama a agents_available para ver la lista vigente.';
       return {
         ok: false,
@@ -151,7 +159,18 @@ async function runAgent(task, opts) {
     }
   }
 
-  // Los archivos de contexto los lee el servidor, no Claude: asi el contenido
+  // Una ruta de salida fuera del proyecto se rechaza ANTES de llamar al agente:
+  // si se comprobase al escribir, el agente ya habria gastado cuota en un
+  // resultado que nunca se va a poder guardar
+  if (task.output_file) {
+    try {
+      workspace.resolver(task.output_file);
+    } catch (err) {
+      return { ok: false, id, role, provider: providerId, providerLabel: agent.label, model, error: err.message };
+    }
+  }
+
+  // Los archivos de contexto los lee el servidor, no el orquestador: asi el contenido
   // llega al agente sin que el jefe lo tenga que teclear en el prompt
   const contexto = workspace.leerContexto(task.context_files);
 
@@ -187,8 +206,7 @@ async function runAgent(task, opts) {
     // Throttle de los eventos de progreso: no hace falta repintar por cada token
     let lastPing = 0;
     const result = await providers.chat({
-      providerId,
-      apiKey,
+      agent,
       model,
       system: task.system,
       prompt: String(task.prompt || '') + contexto.texto + instruccionSalida,
@@ -341,7 +359,7 @@ async function runAgent(task, opts) {
   }
 }
 
-/** Da formato al resultado de un agente para devolverselo a Claude. */
+/** Da formato al resultado de un agente para devolverselo al orquestador. */
 function formatResult(r) {
   const head = '### ' + r.role +
     (r.provider ? '  [' + (r.providerLabel || r.provider) + ' / ' + r.model + ']' : '');
@@ -409,12 +427,13 @@ function text(s) {
  * acordarse de preguntar.
  */
 async function avisoDeSalud() {
-  const malos = health.resumen(PROVIDER_IDS).filter((f) => f.nivel !== 'sano');
+  const agentes = providers.listAgents();
+  const malos = health.resumen(agentes.map((a) => a.id)).filter((f) => f.nivel !== 'sano');
   if (!malos.length) return '';
 
   const lineas = ['', '---', '', '## Aviso del supervisor'];
   for (const f of malos) {
-    const meta = providers.getProvider(f.providerId);
+    const meta = agentes.find((a) => a.id === f.providerId) || { label: f.providerId };
     lineas.push('- ' + meta.label + ': ' + f.nivel.toUpperCase() +
       (f.motivoAgotado ? ' (' + f.motivoAgotado + ', ~' + f.minutosParaReintentar + ' min)' : '') +
       ' — ' + f.ok + ' ok / ' + f.fallos + ' fallos');
@@ -432,14 +451,14 @@ async function avisoDeSalud() {
 }
 
 async function main() {
-  const server = new McpServer({ name: 'gcenter', version: '1.1.0' });
+  const server = new McpServer({ name: 'gcenter', version: require('../../package.json').version });
 
   server.registerTool(
     'agents_available',
     {
       title: 'Ver agentes disponibles',
       description:
-        'Lista los proveedores gratuitos configurados y sus modelos disponibles AHORA MISMO, consultando ' +
+        'Lista los agentes que el usuario ha configurado y sus modelos utilizables AHORA MISMO, consultando ' +
         'el catalogo en vivo de cada uno. Llamala al empezar la sesion, y de nuevo si una delegacion falla ' +
         'por modelo invalido. Los ids de modelo cambian cada pocas semanas: no te fies de los que recuerdes ' +
         'de otras conversaciones, usa solo los que devuelva esta herramienta.',
@@ -447,45 +466,59 @@ async function main() {
         refresh: z
           .boolean()
           .optional()
-          .describe('Ignora la cache de 10 minutos y vuelve a preguntar a cada proveedor.')
+          .describe('Ignora la cache de 10 minutos y vuelve a preguntar a cada agente.')
       }
     },
     async (args) => {
       const force = Boolean(args && args.refresh);
-      const list = providers.listProviders();
+      const soloGratis = config.load().freeOnly !== false;
+      const list = providers.listAgents();
       const lines = ['# Agentes disponibles en GCenter', ''];
+      lines.push('Filtro de gratuidad: ' + (soloGratis
+        ? 'ACTIVO (solo modelos gratuitos verificados)'
+        : 'DESACTIVADO por el usuario (se permiten modelos de pago)'));
+      lines.push('');
 
-      // En serie, cuatro proveedores lentos sumarian mas de un minuto de espera
-      const jobs = list.map(async (p) => {
-        const key = config.apiKeyFor(p.id, p.keyName);
-        if (!key) return { p, key: null };
-        const catalog = await providers.fetchModels(p.id, key, { force });
-        return { p, key, catalog };
-      });
-      const results = await Promise.all(jobs);
+      if (!list.length) {
+        lines.push('EL USUARIO NO HA CONFIGURADO NINGUN AGENTE.');
+        lines.push('Haz tu el trabajo. Si la tarea es grande, sugierele que anada alguno desde el boton');
+        lines.push('de agentes del sidebar de GCenter: basta con un nombre y una API key de su cuenta.');
+        return text(lines.join('\n'));
+      }
+
+      // En serie, varios proveedores lentos sumarian mas de un minuto de espera
+      const results = await Promise.all(
+        list.map(async (a) => ({ a, catalog: await providers.fetchModels(a, { force }) }))
+      );
 
       let activos = 0;
-      for (const { p, key, catalog } of results) {
-        if (!key) {
-          lines.push('## ' + p.label + '  [SIN API KEY - no usable]');
-          lines.push('   Para activarlo, el usuario debe pedir una llave gratis en ' + p.signupUrl);
-          lines.push('   y pegarla en el boton de ajustes del sidebar de GCenter.');
+      for (const { a, catalog } of results) {
+        if (!catalog.ok) {
+          lines.push('## ' + a.label + '  [NO RESPONDE: ' + catalog.error + ']');
+          lines.push('   No delegues aqui hasta que vuelva. Usa otro agente.');
           lines.push('');
           continue;
         }
-
-        if (!catalog.ok) {
-          lines.push('## ' + p.label + '  [NO RESPONDE: ' + catalog.error + ']');
-          lines.push('   No delegues aqui hasta que vuelva. Usa otro proveedor.');
+        if (catalog.bloqueado) {
+          lines.push('## ' + a.label + '  [BLOQUEADO: gratuidad no verificable]');
+          lines.push('   Su catalogo no publica precios y el filtro de gratuidad esta activo. No delegues aqui.');
+          lines.push('');
+          continue;
+        }
+        if (!catalog.models.length) {
+          lines.push('## ' + a.label + '  [SIN MODELOS UTILIZABLES]');
           lines.push('');
           continue;
         }
 
         activos += 1;
-        lines.push('## ' + p.label + '  [ACTIVO]  provider="' + p.id + '"');
-        lines.push('   Cuota: ' + p.free);
-        lines.push('   Fuerte en: ' + p.strengths);
-        lines.push('   Modelos gratuitos y chateables (' + catalog.models.length +
+        lines.push('## ' + a.label + '  [ACTIVO]  provider="' + a.id + '"' +
+          (a.custom ? '' : '  (' + a.providerLabel + ')'));
+        if (!a.custom) {
+          lines.push('   Cuota: ' + a.free);
+          lines.push('   Fuerte en: ' + a.strengths);
+        }
+        lines.push('   Modelos ' + (soloGratis ? 'gratuitos ' : '') + 'de chat (' + catalog.models.length +
           ' de ' + (catalog.totalSeen || catalog.models.length) + ' del catalogo):');
         for (const m of catalog.models.slice(0, 40)) lines.push('     - ' + m);
         if (catalog.models.length > 40) lines.push('     ... y ' + (catalog.models.length - 40) + ' mas');
@@ -493,13 +526,15 @@ async function main() {
       }
 
       lines.push('# Reglas');
-      lines.push('- Usa SOLO ids de los listados arriba. Cualquier otro se rechaza antes de llamar al');
-      lines.push('  proveedor, porque cobraria por token.');
+      lines.push('- Usa SOLO ids de los listados arriba, con el provider="..." de su agente.');
+      if (soloGratis) {
+        lines.push('- Cualquier otro modelo se rechaza antes de llamar al proveedor, porque podria cobrar.');
+      }
       lines.push('- Puedes lanzar varios agentes del mismo proveedor con modelos distintos a la vez,');
       lines.push('  por ejemplo para contrastar dos respuestas al mismo problema.');
       if (activos === 0) {
         lines.push('- AHORA MISMO NO HAY NINGUN AGENTE UTILIZABLE: haz tu el trabajo y avisa al usuario');
-        lines.push('  de que configure alguna API key en el sidebar.');
+        lines.push('  de que revise sus agentes en el sidebar de GCenter.');
       }
 
       return text(lines.join('\n'));
@@ -511,7 +546,7 @@ async function main() {
     {
       title: 'Delegar una tarea a un agente',
       description:
-        'Envia UNA tarea a un modelo gratuito subordinado y devuelve su respuesta. Usala para todo lo que no ' +
+        'Envia UNA tarea a un agente subordinado y devuelve su respuesta. Usala para todo lo que no ' +
         'requiera tu criterio directo: generar codigo repetitivo, resumir, traducir, explicar, buscar patrones, ' +
         'redactar tests o documentacion. El prompt debe ser AUTOCONTENIDO: el agente no ve la conversacion ni ' +
         'tiene acceso al disco, asi que incluye dentro del prompt todo el codigo o contexto que necesite.',
@@ -527,13 +562,13 @@ async function main() {
             'reencamina solo si falla, y te avisa si no queda ninguno. Alternativa a provider+model.'
           ),
         provider: z
-          .enum(PROVIDER_IDS)
+          .string()
           .optional()
-          .describe('Proveedor concreto, si prefieres elegir a mano. Requiere tambien `model`.'),
+          .describe('Id de un agente concreto (provider="..." en agents_available), si prefieres elegir a mano. Requiere tambien `model`.'),
         model: z
           .string()
           .optional()
-          .describe('Id exacto de un modelo listado por agents_available. Los de pago se rechazan.'),
+          .describe('Id exacto de un modelo listado por agents_available. Con el filtro de gratuidad activo, los de pago se rechazan.'),
         prompt: z
           .string()
           .describe(
@@ -573,7 +608,7 @@ async function main() {
       description:
         'Lanza VARIAS tareas a la vez, cada una en su propio agente, y espera a que todas terminen. ' +
         'Es la herramienta preferida cuando el trabajo se puede trocear: cada agente aparece como una tarjeta ' +
-        'independiente en el sidebar. Puedes mezclar proveedores y modelos libremente, incluso repetir proveedor ' +
+        'independiente en el sidebar. Puedes mezclar agentes y modelos libremente, incluso repetir agente ' +
         'con modelos distintos para contrastar respuestas. Si un agente falla, los demas siguen y te llega el ' +
         'error solo de ese.',
       inputSchema: {
@@ -583,7 +618,7 @@ async function main() {
               role: z.string().describe('Etiqueta corta en MAYUSCULAS para el sidebar.'),
               capability: z.enum(capabilities.NOMBRES).optional()
                 .describe('Especialidad pedida; GCenter elige el agente vivo. Alternativa a provider+model.'),
-              provider: z.enum(PROVIDER_IDS).optional().describe('Proveedor concreto, si lo eliges a mano.'),
+              provider: z.string().optional().describe('Id de un agente concreto, si lo eliges a mano.'),
               model: z.string().optional().describe('Id exacto de un modelo listado por agents_available.'),
               prompt: z.string().describe('Que hay que hacer. El contenido de archivos va en context_files.'),
               context_files: z.array(z.string()).optional()
@@ -631,22 +666,23 @@ async function main() {
     {
       title: 'Supervisar el estado del equipo',
       description:
-        'Parte de situacion del equipo: fiabilidad de cada proveedor, cuales estan agotados o dando ' +
+        'Parte de situacion del equipo: fiabilidad de cada agente, cuales estan agotados o dando ' +
         'respuestas malas, y que capacidades han quedado SIN CUBRIR y por tanto te tocan a ti. ' +
         'Consultala cada pocas delegaciones, y siempre que veas fallos repetidos o respuestas de mala ' +
         'calidad, para reajustar el reparto antes de que el problema se propague al proyecto.',
       inputSchema: {}
     },
     async () => {
-      const filas = health.resumen(PROVIDER_IDS);
+      const agentes = providers.listAgents();
+      const filas = health.resumen(agentes.map((a) => a.id));
       const cob = await capabilities.cobertura();
       const lines = ['# Parte de situacion del equipo', ''];
 
-      lines.push('## Proveedores');
+      lines.push('## Agentes');
+      if (!agentes.length) lines.push('  (el usuario no ha configurado ningun agente)');
       for (const f of filas) {
-        const meta = providers.getProvider(f.providerId);
-        const key = config.apiKeyFor(f.providerId, meta.keyName);
-        if (!key) {
+        const meta = agentes.find((a) => a.id === f.providerId);
+        if (!meta.key) {
           lines.push('  ' + meta.label.padEnd(16) + 'sin API key');
           continue;
         }
@@ -677,7 +713,8 @@ async function main() {
       const huerfanas = [];
       for (const c of cob) {
         if (c.cubierta) {
-          lines.push('  ' + c.capacidad.padEnd(14) + 'cubierta por ' + c.label + ' / ' + c.model);
+          lines.push('  ' + c.capacidad.padEnd(14) + 'cubierta por ' + c.label + ' / ' + c.model +
+            '  (provider="' + c.provider + '")');
         } else {
           huerfanas.push(c);
           lines.push('  ' + c.capacidad.padEnd(14) + 'SIN CUBRIR -> ' + c.descripcion);
@@ -709,7 +746,7 @@ async function main() {
         'Hazlo SIEMPRE que tengas que corregir de forma importante o descartar un resultado, y tambien ' +
         'cuando uno salga especialmente bien: sin estas valoraciones el reparto no aprende.',
       inputSchema: {
-        provider: z.enum(PROVIDER_IDS).describe('Proveedor que hizo el trabajo.'),
+        provider: z.string().describe('Id del agente que hizo el trabajo (el que aparece entre corchetes en su resultado).'),
         model: z.string().describe('Modelo exacto que hizo el trabajo.'),
         rating: z.enum(['bueno', 'regular', 'malo']).describe(
           'bueno = usable tal cual o con retoques minimos; regular = sirvio pero hubo que corregir; ' +
@@ -758,20 +795,20 @@ async function main() {
         live.length ? live.join('\n') : '  (ninguno)',
         '',
         'Sesion: ' + stats.delegations + ' delegaciones, ' + stats.completed + ' ok, ' + stats.failed + ' fallidas',
-        'Tokens movidos fuera de Claude: ' + stats.tokensIn + ' entrada / ' + stats.tokensOut + ' salida'
+        'Tokens movidos fuera de ' + JEFE + ': ' + stats.tokensIn + ' entrada / ' + stats.tokensOut + ' salida'
       ];
       return text(out.join('\n'));
     }
   );
 
   bus.connect();
-  bus.send({ type: 'mcp.ready', providers: PROVIDER_IDS });
+  bus.send({ type: 'mcp.ready', providers: agentIds() });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // El SDK solo escucha datos y errores de stdin, no su cierre. Si Claude
-  // muere sin cerrar bien (un crash, un kill), este proceso seguiria vivo para
+  // El SDK solo escucha datos y errores de stdin, no su cierre. Si el
+  // orquestador muere sin cerrar bien (un crash, un kill), este proceso seguiria vivo para
   // siempre, sujeto por la conexion del bus. Que se vaya con su padre.
   const salir = () => {
     bus.close();

@@ -69,22 +69,18 @@ async function main() {
     clientInfo: { name: 'gcenter-e2e', version: '1.0.0' }
   });
 
-  // Elegimos un modelo vivo por proveedor
+  // Elegimos un modelo vivo por agente configurado
   const tasks = [];
-  for (const p of providers.listProviders()) {
-    const key = config.apiKeyFor(p.id, p.keyName);
-    if (!key) {
-      console.log('  \x1b[2m○ ' + p.label + ': sin llave, se salta\x1b[0m');
-      continue;
-    }
-
-    const catalog = await providers.fetchModels(p.id, key);
+  const agentes = providers.listAgents();
+  if (!agentes.length) console.log('  \x1b[2m○ no hay agentes configurados\x1b[0m');
+  for (const p of agentes) {
+    const catalog = await providers.fetchModels(p);
     if (!catalog.ok || !catalog.models.length) {
       console.log('  \x1b[91m✕ ' + p.label + ': no pude listar modelos (' + catalog.error + ')\x1b[0m');
       continue;
     }
 
-    const preferido = (PREFERIDOS[p.id] || []).find((m) => catalog.models.includes(m));
+    const preferido = (PREFERIDOS[p.kind] || []).find((m) => catalog.models.includes(m));
     tasks.push({
       role: p.label.split(' ')[0].toUpperCase(),
       provider: p.id,

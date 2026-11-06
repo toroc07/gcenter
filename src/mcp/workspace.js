@@ -30,7 +30,7 @@ const config = require('../shared/config');
 
 const MAX_CONTEXTO = 400 * 1024; // tope de lo que se adjunta a un prompt
 
-/** Directorio raiz del proyecto: el mismo en el que trabaja la sesion de Claude. */
+/** Directorio raiz del proyecto: el mismo en el que trabaja la sesion del orquestador. */
 function raiz() {
   return path.resolve(process.env.GCENTER_CWD || config.load().cwd || process.cwd());
 }
@@ -185,11 +185,10 @@ function escribirResultado(rel, texto) {
 
 /**
  * Los modos que piden supervision explicita no deben ver archivos cambiados
- * por la puerta de atras: en ellos el agente devuelve el texto y Claude decide.
+ * por la puerta de atras: en ellos el agente devuelve el texto y el orquestador decide.
  */
 function escrituraPermitida() {
-  const modo = config.load().permissionMode || 'acceptEdits';
-  return !['plan', 'manual', 'dontAsk'].includes(modo);
+  return !config.escrituraSupervisada();
 }
 
 module.exports = {
