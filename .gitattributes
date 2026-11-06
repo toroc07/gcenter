@@ -6,5 +6,6 @@
 
 # Binarios: nunca tocarles los finales de linea
 *.ico binary
+*.icns binary
 *.png binary
 *.exe binary

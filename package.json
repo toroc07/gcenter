@@ -1,7 +1,7 @@
 {
   "name": "gcenter",
-  "version": "1.0.0",
-  "description": "Terminal de escritorio donde Claude Code dirige un equipo de modelos de IA gratuitos para gastar menos tokens.",
+  "version": "2.0.0",
+  "description": "Terminal de escritorio donde Claude Code u OpenCode dirigen un equipo de agentes de IA para gastar menos tokens.",
   "main": "src/main/main.js",
   "author": "toroc07",
   "license": "MIT",
@@ -16,6 +16,7 @@
   },
   "keywords": [
     "claude-code",
+    "opencode",
     "mcp",
     "electron",
     "llm",
@@ -33,7 +34,7 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "mcp": "node src/mcp/server.js",
-    "test": "node test/mcp.test.js",
+    "test": "node test/mcp.test.js && node test/agents.test.js",
     "test:guard": "node test/guard.test.js",
     "test:restart": "node test/reinicio.test.js",
     "test:delegation": "node test/delegacion-real.test.js",
@@ -43,7 +44,8 @@
     "icon": "node scripts/make-icon.js",
     "pack": "electron-builder --win --dir --publish never",
     "dist": "npm run pack && node scripts/apply-icon.js && electron-builder --win portable nsis --prepackaged dist/win-unpacked --publish never",
-    "dist:linux": "electron-builder --linux AppImage deb --publish never"
+    "dist:linux": "electron-builder --linux AppImage deb --publish never",
+    "dist:mac": "electron-builder --mac dmg --arm64 --publish never"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.15",
@@ -122,14 +124,33 @@
       "icon": "assets/icon.png",
       "category": "Development",
       "executableName": "gcenter",
-      "synopsis": "Claude Code dirige un equipo de modelos de IA gratuitos",
+      "synopsis": "Claude Code u OpenCode dirigen un equipo de agentes de IA",
       "maintainer": "toroc07 <214756457+toroc07@users.noreply.github.com>"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false
     },
     "appImage": {
       "artifactName": "GCenter-${version}-x86_64.AppImage"
     },
     "deb": {
       "artifactName": "gcenter_${version}_amd64.deb"
+    },
+    "dmg": {
+      "artifactName": "GCenter-${version}-arm64.dmg"
     },
     "portable": {
       "artifactName": "GCenter-portable-${version}.exe",

@@ -175,3 +175,34 @@ fs.writeFileSync(out, toICO(images));
 fs.writeFileSync(path.join(__dirname, '..', 'assets', 'icon.png'), images[images.length - 1].png);
 
 console.log('icon.ico generado (' + SIZES.join(', ') + ') ->', out);
+
+/* ─────────────────────────────── ICNS ────────────────────────────────── */
+
+/**
+ * Icono de macOS. Un .icns es una lista de entradas "tipo + longitud + PNG";
+ * macOS exige al menos 512 px, asi que se dibuja aparte en los tamanos de
+ * Retina. El diseno es vectorial (escala desde 256), no se pixela.
+ */
+function toICNS(entradas) {
+  const partes = entradas.map(({ tipo, png }) => {
+    const cab = Buffer.alloc(8);
+    cab.write(tipo, 0, 'ascii');
+    cab.writeUInt32BE(png.length + 8, 4);
+    return Buffer.concat([cab, png]);
+  });
+  const total = 8 + partes.reduce((n, p) => n + p.length, 0);
+  const cab = Buffer.alloc(8);
+  cab.write('icns', 0, 'ascii');
+  cab.writeUInt32BE(total, 4);
+  return Buffer.concat([cab, ...partes]);
+}
+
+const MAC = [
+  { tipo: 'ic07', size: 128 },
+  { tipo: 'ic08', size: 256 },
+  { tipo: 'ic09', size: 512 },
+  { tipo: 'ic10', size: 1024 }
+];
+const icns = path.join(__dirname, '..', 'assets', 'icon.icns');
+fs.writeFileSync(icns, toICNS(MAC.map((m) => ({ tipo: m.tipo, png: toPNG(draw(m.size), m.size) }))));
+console.log('icon.icns generado (' + MAC.map((m) => m.size).join(', ') + ') ->', icns);
