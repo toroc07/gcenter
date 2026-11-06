@@ -138,7 +138,7 @@
       ],
       "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools",
-      "identity": "-",
+      "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "notarize": false
