@@ -46,13 +46,40 @@ const TRANSCRIPCION = [
   ''
 ].join('\r\n');
 
-const PROVEEDORES = [
-  { id: 'groq', label: 'Groq', hasKey: true },
-  { id: 'gemini', label: 'Google Gemini', hasKey: true },
-  { id: 'openrouter', label: 'OpenRouter', hasKey: true },
-  { id: 'nvidia', label: 'NVIDIA NIM', hasKey: true },
-  { id: 'mistral', label: 'Mistral', hasKey: false }
-].map((p) => Object.assign({ free: '', strengths: '', signupUrl: '', keyName: '', color: '#888' }, p));
+// Agentes de demostracion: nombres de proveedor, sin llaves de nadie
+const AGENTES = [
+  { id: 'groq', name: 'Groq', providerLabel: 'Groq' },
+  { id: 'gemini', name: 'Gemini', providerLabel: 'Google Gemini' },
+  { id: 'openrouter', name: 'OpenRouter', providerLabel: 'OpenRouter' },
+  { id: 'nvidia', name: 'NVIDIA', providerLabel: 'NVIDIA NIM' }
+].map((a) => Object.assign({ kind: a.id, key: '', custom: false, color: '#888' }, a));
+
+const ORQUESTADOR = {
+  active: 'claude',
+  label: 'Claude Code',
+  orchestrators: [
+    { id: 'claude', label: 'Claude Code', installed: true, path: '', install: '', login: '' },
+    { id: 'opencode', label: 'OpenCode', installed: true, path: '', install: '', login: '' }
+  ],
+  models: [
+    { id: 'opus', name: 'Opus 5.5', tag: 'maximo criterio' },
+    { id: 'sonnet', name: 'Sonnet 5.5', tag: 'equilibrado' },
+    { id: 'fable', name: 'Fable 5.1', tag: 'creativo' },
+    { id: 'haiku', name: 'Haiku 4.5', tag: 'rapido y barato' }
+  ],
+  modes: [
+    { id: 'plan', label: 'Plan', desc: '' },
+    { id: 'manual', label: 'Manual', desc: '' },
+    { id: 'acceptEdits', label: 'Edicion automatica', desc: '' },
+    { id: 'auto', label: 'Auto', desc: '' }
+  ],
+  efforts: [
+    { id: '', label: 'Por defecto de Claude' },
+    { id: 'high', label: 'Alto' }
+  ],
+  current: { model: 'opus', mode: 'acceptEdits', effort: 'high' },
+  freeOnly: true
+};
 
 function agente(id, role, provider, label, model, haceMs) {
   return { id, role, provider, providerLabel: label, model, startedAt: Date.now() - haceMs, task: '' };
@@ -60,7 +87,7 @@ function agente(id, role, provider, label, model, haceMs) {
 
 /** Reproduce un instante a mitad de un lote paralelo. */
 function representar() {
-  emitir('session:started', { cwd: CWD, model: 'opus' });
+  emitir('session:started', { cwd: CWD, model: 'opus', orchestrator: 'claude', orchestratorLabel: 'Claude Code' });
   emitir('session:data', TRANSCRIPCION);
 
   const ev = (e) => emitir('agents:event', e);
@@ -112,8 +139,9 @@ contextBridge.exposeInMainWorld('gcenter', {
     status: async () => ({ running: true }),
     setModel: async () => ({ running: true }),
     setEffort: async () => ({ running: true }),
-    setPermissionMode: async () => true
+    setMode: async () => ({ running: true })
   },
+  orchestrator: { info: async () => ORQUESTADOR, set: async () => ({ ok: true }) },
   config: {
     get: async () => ({
       model: 'opus',
@@ -122,14 +150,21 @@ contextBridge.exposeInMainWorld('gcenter', {
       theme: 'dark',
       cwd: CWD,
       recentDirs: [],
-      keys: {},
+      agents: AGENTES,
+      orchestrator: 'claude',
       freeOnly: true
     }),
-    set: async () => true,
-    setKey: async () => true
+    set: async () => true
   },
   dir: { choose: async () => null, set: async () => ({ ok: false }) },
-  providers: { list: async () => PROVEEDORES, check: async () => ({ ok: true }) },
+  agents: {
+    list: async () => AGENTES,
+    templates: async () => [],
+    detect: async () => ({ kind: null }),
+    add: async () => ({ ok: false }),
+    remove: async () => true,
+    check: async () => ({ ok: true })
+  },
   openExternal: async () => {},
   on: (canal, h) => {
     (manejadores[canal] = manejadores[canal] || []).push(h);

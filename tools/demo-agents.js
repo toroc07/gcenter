@@ -23,7 +23,7 @@ const FAKE = [
   { role: 'REASONER',   provider: 'openrouter', providerLabel: 'OpenRouter',    color: '#8b5cf6', model: 'deepseek/deepseek-r1:free', ms: 9500, chars: 4100 },
   { role: 'CONTRASTE',  provider: 'openrouter', providerLabel: 'OpenRouter',    color: '#8b5cf6', model: 'qwen/qwen3-235b-a22b:free', ms: 7200, chars: 3300 },
   { role: 'LONGCTX',    provider: 'gemini',     providerLabel: 'Google Gemini', color: '#4285f4', model: 'gemini-2.5-flash',          ms: 6100, chars: 5200 },
-  { role: 'REVIEWER',   provider: 'github',     providerLabel: 'GitHub Models', color: '#a371f7', model: 'openai/gpt-4.1-mini',       ms: 5400, chars: 1800 },
+  { role: 'REVIEWER',   provider: 'nvidia',     providerLabel: 'NVIDIA',        color: '#76b900', model: 'moonshotai/kimi-k3',        ms: 5400, chars: 1800 },
   { role: 'DOC',        provider: 'mistral',    providerLabel: 'Mistral',       color: '#ff7000', model: 'mistral-small-latest',      ms: 3100, chars: 1200 }
 ];
 

@@ -2,13 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen } = require('electron');
 
 const config = require('../shared/config');
 const providers = require('../mcp/providers');
 const bus = require('./bus');
-const { ClaudeSession } = require('./session');
-const { locate } = require('./claude-locator');
+const { Session, orquestador, binDe, instalados } = require('./session');
 
 let win = null;
 let session = null;
@@ -97,15 +96,26 @@ function createWindow() {
  */
 let sesionLista = null;
 
+/**
+ * En macOS los atajos de edicion (Cmd+C, Cmd+V, Cmd+Q) los da el menu de la
+ * aplicacion: sin el, no funcionan ni en los campos de texto. En Windows y
+ * Linux no se toca nada.
+ */
+function instalarMenu() {
+  if (process.platform !== 'darwin') return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+}
+
 function boot() {
   nativeTheme.themeSource = 'dark';
+  instalarMenu();
 
   // La ventana primero: es lo unico que el usuario esta esperando ver. El bus
   // tarda unos milisegundos, pero encadenarlo aqui retrasaba el primer pintado.
   createWindow();
 
   sesionLista = bus.start((event) => send('agents:event', event)).then(({ port, token }) => {
-    session = new ClaudeSession({ emit: send });
+    session = new Session({ emit: send });
     session.setBus(port, token);
     return session;
   });
@@ -141,7 +151,7 @@ ipcMain.handle('win:close', () => win && win.close());
 ipcMain.handle('app:openExternal', (_e, url) => shell.openExternal(url));
 
 /* ------------------------------------------------------------------ *
- * IPC: sesion de Claude
+ * IPC: sesion del orquestador
  * ------------------------------------------------------------------ */
 
 ipcMain.handle('session:start', async () => (await sesionLista).start());
@@ -154,51 +164,71 @@ ipcMain.handle('session:restart', async () => {
 ipcMain.handle('session:write', (_e, data) => session && session.write(data));
 ipcMain.handle('session:resize', (_e, { cols, rows }) => session && session.resize(cols, rows));
 ipcMain.handle('session:status', () => ({
-  running: Boolean(session && session.running),
-  claudePath: locate(config.load().claudePath)
+  running: Boolean(session && session.running)
 }));
 
-ipcMain.handle('session:setModel', async (_e, model) => {
-  const s = await sesionLista;
-  const hot = s.switchModel(model);
-  return { hot, running: s.running };
+ipcMain.handle('session:setModel', async (_e, model) => (await sesionLista).cambiarAjuste('model', model));
+ipcMain.handle('session:setEffort', async (_e, effort) => (await sesionLista).cambiarAjuste('effort', effort));
+ipcMain.handle('session:setMode', async (_e, mode) => (await sesionLista).cambiarAjuste('mode', mode));
+
+/* ------------------------------------------------------------------ *
+ * IPC: eleccion de orquestador
+ * ------------------------------------------------------------------ */
+
+/**
+ * Todo lo que la interfaz necesita para pintar el panel del orquestador:
+ * cuales estan instalados, el activo, sus modelos, modos y esfuerzos.
+ */
+ipcMain.handle('orchestrator:info', async () => {
+  const cfg = config.load();
+  const orq = orquestador(cfg.orchestrator);
+  const bin = binDe(orq, cfg);
+  return {
+    active: orq.id,
+    label: orq.label,
+    orchestrators: instalados(cfg),
+    models: await orq.modelos(bin, cfg),
+    modes: orq.modos,
+    efforts: orq.esfuerzos,
+    current: orq.estado(cfg),
+    freeOnly: cfg.freeOnly !== false
+  };
 });
 
-ipcMain.handle('session:setEffort', async (_e, effort) => {
+/** Cambia de orquestador. Empieza una conversacion nueva: no hay forma de
+ *  continuar en OpenCode una conversacion de Claude Code, ni al reves. */
+ipcMain.handle('orchestrator:set', async (_e, id) => {
+  if (!['claude', 'opencode'].includes(id)) return { ok: false };
+  config.save({ orchestrator: id });
   const s = await sesionLista;
-  const hot = s.switchEffort(effort);
-  return { hot, running: s.running };
-});
-
-ipcMain.handle('session:setPermissionMode', async (_e, mode) => {
-  const s = await sesionLista;
-  return s.setPermissionMode(mode);
+  s.stop();
+  return { ok: s.start() };
 });
 
 /* ------------------------------------------------------------------ *
  * IPC: configuracion y directorio de trabajo
  * ------------------------------------------------------------------ */
 
+/** Nunca mandamos las llaves completas al renderer: solo un trozo para reconocerlas. */
+function enmascarar(key) {
+  const k = String(key || '');
+  if (!k) return '';
+  return k.length > 12 ? k.slice(0, 4) + '...' + k.slice(-4) : '...' + k.slice(-2);
+}
+
 ipcMain.handle('config:get', () => {
   const cfg = config.load();
-  // Nunca mandamos las llaves completas al renderer: solo si estan puestas
-  const masked = {};
-  for (const [id, value] of Object.entries(cfg.keys)) {
-    masked[id] = value ? value.slice(0, 4) + '...' + value.slice(-4) : '';
-  }
-  return Object.assign({}, cfg, { keys: masked });
+  return Object.assign({}, cfg, {
+    agents: cfg.agents.map((a) => Object.assign({}, a, { key: enmascarar(a.key) }))
+  });
 });
 
+// Solo ajustes de interfaz: los agentes y el orquestador tienen su propio IPC
+const AJUSTES_LIBRES = ['freeOnly', 'theme'];
 ipcMain.handle('config:set', (_e, patch) => {
-  config.save(patch);
-  return true;
-});
-
-ipcMain.handle('config:setKey', (_e, { provider, value }) => {
-  const cfg = config.load();
-  const keys = Object.assign({}, cfg.keys);
-  keys[provider] = value;
-  config.save({ keys });
+  const limpio = {};
+  for (const k of AJUSTES_LIBRES) if (patch && k in patch) limpio[k] = patch[k];
+  config.save(limpio);
   return true;
 });
 
@@ -224,32 +254,99 @@ ipcMain.handle('dir:set', (_e, dir) => {
 });
 
 /* ------------------------------------------------------------------ *
- * IPC: proveedores de agentes
+ * IPC: agentes del usuario
  * ------------------------------------------------------------------ */
 
-ipcMain.handle('providers:list', () => {
+/** Lo que la interfaz ve de un agente: nunca la llave entera. */
+function vistaAgente(a) {
+  return {
+    id: a.id,
+    name: a.label,
+    kind: a.kind,
+    providerLabel: a.providerLabel,
+    color: a.color,
+    baseUrl: a.custom ? a.baseUrl : '',
+    signupUrl: a.signupUrl,
+    key: enmascarar(a.key),
+    custom: a.custom
+  };
+}
+
+/**
+ * Prueba un agente contra su proveedor: si la llave vale, cuantos modelos hay
+ * y cuantos son gratuitos, y si su gratuidad se puede comprobar.
+ */
+async function probar(agent) {
   const cfg = config.load();
-  return providers.listProviders().map((p) => {
-    const key = config.apiKeyFor(p.id, p.keyName);
-    return Object.assign({}, p, {
-      hasKey: Boolean(key),
-      // Marcamos si la llave viene del entorno para que el usuario no se
-      // extrane de ver el proveedor activo con el campo de Ajustes vacio
-      fromEnv: Boolean(process.env[p.keyName]) && !cfg.keys[p.id]
-    });
-  });
+  const res = await providers.fetchModels(agent, { timeoutMs: 20000, force: true });
+  return {
+    ok: res.ok,
+    error: res.error,
+    total: (res.raw || []).length,
+    freeCount: res.freeCount || 0,
+    usable: res.models.length,
+    verificable: res.verificable !== false,
+    bloqueado: Boolean(res.bloqueado),
+    freeOnly: cfg.freeOnly !== false
+  };
+}
+
+ipcMain.handle('agents:list', () => providers.listAgents().map(vistaAgente));
+
+ipcMain.handle('agents:templates', () => providers.listPlantillas());
+
+/** Mientras el usuario escribe: que proveedor es y si hara falta la URL. */
+ipcMain.handle('agents:detect', (_e, { name, key }) => {
+  const kind = providers.detectar(name, key);
+  const p = kind ? providers.PLANTILLAS[kind] : null;
+  return p ? { kind, label: p.label, signupUrl: p.signupUrl } : { kind: null };
 });
 
-ipcMain.handle('providers:check', async (_e, providerId) => {
-  const list = providers.listProviders();
-  const meta = list.find((p) => p.id === providerId);
-  if (!meta) return { ok: false, error: 'proveedor desconocido' };
+/**
+ * Anade un agente. Primero lo prueba: un agente que ni siquiera responde no
+ * se guarda, para que el usuario se entere en el momento y no a mitad de un
+ * proyecto.
+ */
+ipcMain.handle('agents:add', async (_e, { name, key, baseUrl }) => {
+  const nombre = String(name || '').trim();
+  const llave = String(key || '').trim();
+  if (!nombre) return { ok: false, error: 'Falta el nombre del agente.' };
+  if (!llave) return { ok: false, error: 'Falta la API key.' };
 
-  const key = config.apiKeyFor(providerId, meta.keyName);
-  if (!key) return { ok: false, error: 'sin API key' };
+  const kind = providers.detectar(nombre, llave);
+  const url = providers.normalizarUrl(baseUrl);
+  if (!kind && !/^https?:\/\//i.test(url)) {
+    return { ok: false, needUrl: true, error: 'No reconozco este proveedor: indica su URL base (compatible con OpenAI).' };
+  }
 
-  // `force` porque el boton "Probar" debe comprobar de verdad, no responder
-  // desde la cache de catalogos
-  const res = await providers.fetchModels(providerId, key, { timeoutMs: 20000, force: true });
-  return { ok: res.ok, error: res.error, models: res.models, count: res.models.length };
+  const cfg = config.load();
+  const nuevo = {
+    id: providers.idLibre(nombre, cfg.agents.map((a) => a.id)),
+    name: nombre,
+    kind: kind || 'custom',
+    key: llave
+  };
+  if (!kind) nuevo.baseUrl = url;
+
+  const prueba = await probar(providers.resolverAgente(nuevo));
+  if (!prueba.ok) return Object.assign({ ok: false }, prueba, { error: 'No responde: ' + prueba.error });
+
+  config.save({ agents: cfg.agents.concat([nuevo]) });
+  return Object.assign({}, prueba, { ok: true, agent: vistaAgente(providers.resolverAgente(nuevo)) });
+});
+
+ipcMain.handle('agents:remove', (_e, id) => {
+  const cfg = config.load();
+  config.save({ agents: cfg.agents.filter((a) => a.id !== id) });
+  return true;
+});
+
+ipcMain.handle('agents:check', async (_e, id) => {
+  let agent;
+  try {
+    agent = providers.getAgent(id);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  return probar(agent);
 });

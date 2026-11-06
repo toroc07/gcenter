@@ -22,13 +22,17 @@ const api = {
     status: () => ipcRenderer.invoke('session:status'),
     setModel: (model) => ipcRenderer.invoke('session:setModel', model),
     setEffort: (effort) => ipcRenderer.invoke('session:setEffort', effort),
-    setPermissionMode: (mode) => ipcRenderer.invoke('session:setPermissionMode', mode)
+    setMode: (mode) => ipcRenderer.invoke('session:setMode', mode)
+  },
+
+  orchestrator: {
+    info: () => ipcRenderer.invoke('orchestrator:info'),
+    set: (id) => ipcRenderer.invoke('orchestrator:set', id)
   },
 
   config: {
     get: () => ipcRenderer.invoke('config:get'),
-    set: (patch) => ipcRenderer.invoke('config:set', patch),
-    setKey: (provider, value) => ipcRenderer.invoke('config:setKey', { provider, value })
+    set: (patch) => ipcRenderer.invoke('config:set', patch)
   },
 
   dir: {
@@ -36,9 +40,13 @@ const api = {
     set: (dir) => ipcRenderer.invoke('dir:set', dir)
   },
 
-  providers: {
-    list: () => ipcRenderer.invoke('providers:list'),
-    check: (id) => ipcRenderer.invoke('providers:check', id)
+  agents: {
+    list: () => ipcRenderer.invoke('agents:list'),
+    templates: () => ipcRenderer.invoke('agents:templates'),
+    detect: (name, key) => ipcRenderer.invoke('agents:detect', { name, key }),
+    add: (data) => ipcRenderer.invoke('agents:add', data),
+    remove: (id) => ipcRenderer.invoke('agents:remove', id),
+    check: (id) => ipcRenderer.invoke('agents:check', id)
   },
 
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),

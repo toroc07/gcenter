@@ -1,116 +1,61 @@
 'use strict';
 
 /**
- * Gestiona la sesion interactiva de Claude Code dentro de un pseudo-terminal.
+ * Sesion interactiva del orquestador dentro de un pseudo-terminal.
  *
- * Antes de arrancarla genera el fichero mcp.json que le da acceso a las
- * herramientas de delegacion de GCenter, y le inyecta el prompt de orquestador
- * para que se comporte como jefe del equipo de agentes.
+ * El orquestador puede ser Claude Code u OpenCode. Esta clase no sabe nada de
+ * ninguno de los dos: les pide sus argumentos y su entorno (con el servidor
+ * MCP de GCenter ya configurado) y se ocupa de lo comun, que es lanzar el
+ * proceso, pasarle el teclado y el tamano, y pararlo sin dejar huerfanos.
  */
 
 const fs = require('fs');
-const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const pty = require('@lydell/node-pty');
 
 const config = require('../shared/config');
-const { locate } = require('./claude-locator');
+const { locate } = require('./locator');
 
-/**
- * Variables que describen una sesion de Claude Code PADRE.
- *
- * Si GCenter se abre desde un terminal que ya es una sesion de Claude Code
- * (el integrado de VS Code con la extension, por ejemplo), hereda estas
- * variables y se las pasaria a su propio Claude, que entonces se cree una
- * subsesion: deja de guardar la conversacion (y con ello deja de funcionar
- * --continue), se conecta al canal de mensajeria de la otra sesion y adopta
- * su nivel de esfuerzo en vez del que eligio el usuario. Se quitan solo las
- * que marcan estado de sesion; la configuracion del usuario (proveedor,
- * rutas, tokens de acceso) se respeta.
- */
-const HERENCIA_DE_SESION = [
-  /^CLAUDECODE$/,
-  /^CLAUDE_PID$/,
-  /^CLAUDE_EFFORT$/,
-  /^CLAUDE_AGENT_SDK_/,
-  /^CLAUDE_CODE_(CHILD_SESSION|SESSION_|MESSAGING_|ENTRYPOINT|EXECPATH|SSE_PORT|EMIT_STARTUP_TIMING|ENABLE_TASKS|ENABLE_SDK_|QUESTION_PREVIEW)/,
-  /^MCP_CONNECTION_NONBLOCKING$/
-];
+const ORQUESTADORES = {
+  claude: require('./orchestrators/claude'),
+  opencode: require('./orchestrators/opencode')
+};
 
-const ALLOWED_TOOLS = [
-  'mcp__gcenter__agents_available',
-  'mcp__gcenter__delegate',
-  'mcp__gcenter__delegate_parallel',
-  'mcp__gcenter__agents_running',
-  'mcp__gcenter__agents_health',
-  'mcp__gcenter__agents_feedback'
-].join(',');
-
-/**
- * Dentro de un .exe empaquetado los recursos viven en app.asar. Electron sabe
- * leer de ahi, asi que sus propios ficheros se resuelven tal cual.
- */
-function resolveResource(rel) {
-  return path.join(__dirname, '..', rel);
+function orquestador(id) {
+  return ORQUESTADORES[id] || ORQUESTADORES.claude;
 }
 
-/**
- * Ruta para ficheros que va a abrir un proceso ajeno a Electron. claude.exe no
- * entiende el formato asar, asi que estos recursos se declaran en `asarUnpack`
- * y se sirven desde la carpeta desempaquetada de al lado.
- */
-function resolveExternalResource(rel) {
-  return resolveResource(rel).replace(
-    'app.asar' + path.sep,
-    'app.asar.unpacked' + path.sep
-  );
+/** Ruta del ejecutable de un orquestador, respetando la que fije el usuario. */
+function binDe(orq, cfg) {
+  return locate(orq.bin, cfg[orq.id + 'Path']);
 }
 
-/** Escribe la configuracion MCP que le pasaremos a claude por linea de comandos. */
-function writeMcpConfig(busPort, busToken, cwd) {
-  const serverPath = resolveResource(path.join('mcp', 'server.js'));
-
-  const cfg = {
-    mcpServers: {
-      gcenter: {
-        command: process.execPath,
-        args: [serverPath],
-        env: {
-          // Hace que el propio Electron actue como runtime de Node, asi el .exe
-          // portable no depende de que el usuario tenga Node instalado
-          ELECTRON_RUN_AS_NODE: '1',
-          // Anclamos el directorio de configuracion en vez de dejar que el
-          // servidor MCP lo deduzca: asi lee las mismas llaves que la interfaz
-          // aunque herede un entorno distinto del nuestro
-          GCENTER_HOME: config.configDir(),
-          // Los agentes leen y escriben archivos del proyecto: tienen que saber
-          // cual es, y quedarse dentro de el
-          GCENTER_CWD: cwd,
-          GCENTER_BUS_PORT: String(busPort),
-          GCENTER_BUS_TOKEN: busToken
-        }
-      }
-    }
-  };
-
-  fs.mkdirSync(path.dirname(config.MCP_CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(config.MCP_CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
-  return config.MCP_CONFIG_PATH;
+/** Que orquestadores estan instalados en esta maquina. */
+function instalados(cfg) {
+  const c = cfg || config.load();
+  return Object.values(ORQUESTADORES).map((o) => {
+    const bin = binDe(o, c);
+    return { id: o.id, label: o.label, installed: Boolean(bin), path: bin, install: o.install, login: o.login };
+  });
 }
 
-class ClaudeSession {
+class Session {
   constructor(opts) {
     this.emit = opts.emit; // (channel, payload) => void
+    // Solo para pruebas: fuerza un orquestador sin tocar la configuracion
+    this.forzado = opts.orchestrator || null;
     this.proc = null;
     this.cols = 100;
     this.rows = 30;
     this.busPort = null;
     this.busToken = null;
     this.startedAt = null;
-    // Si el binario no aceptase --append-system-prompt-file, reintentamos una
-    // sola vez pasando el prompt en linea
-    this.useSystemPromptFile = true;
-    this.retriedInline = false;
+    this.reanudar = false;
+    // Si el binario de Claude no aceptase --append-system-prompt-file,
+    // reintentamos una sola vez pasando el prompt en linea
+    this.promptEnLinea = false;
+    this.reintentoEnLinea = false;
   }
 
   setBus(port, token) {
@@ -122,97 +67,86 @@ class ClaudeSession {
     return Boolean(this.proc);
   }
 
-  buildArgs(cfg) {
-    // Lo lee claude.exe, no nosotros: tiene que estar fuera del asar
-    const promptPath = resolveExternalResource(path.join('..', 'prompts', 'orchestrator.md'));
-    const modo = cfg.permissionMode || 'acceptEdits';
-    const args = [
-      '--mcp-config', config.MCP_CONFIG_PATH,
-      '--model', cfg.model || 'opus',
-      '--permission-mode', modo,
-      '--allowedTools', ALLOWED_TOOLS,
-      '--name', 'GCenter'
-    ];
+  /** El orquestador activo segun la configuracion. */
+  actual(cfg) {
+    return orquestador(this.forzado || (cfg || config.load()).orchestrator);
+  }
 
-    // Saltarse los permisos no basta con pedirlo en --permission-mode: Claude
-    // exige ademas habilitarlo explicitamente, o el modo no llega a aplicarse
-    if (modo === 'bypassPermissions') args.push('--allow-dangerously-skip-permissions');
+  /**
+   * Si el orquestador elegido no esta instalado pero el otro si, se cambia
+   * solo. Es lo que hace que un usuario nuevo con solo uno de los dos no tenga
+   * que tocar nada para empezar.
+   */
+  resolverOrquestador(cfg) {
+    const elegido = this.actual(cfg);
+    const bin = binDe(elegido, cfg);
+    if (bin || this.forzado) return { orq: elegido, bin, cambiado: false };
 
-    // Sin esfuerzo elegido no pasamos el flag, para no pisar el valor por
-    // defecto que Claude aplica segun el modelo
-    if (cfg.effort) args.push('--effort', cfg.effort);
+    const otro = Object.values(ORQUESTADORES).find((o) => o.id !== elegido.id && binDe(o, cfg));
+    if (!otro) return { orq: elegido, bin: null, cambiado: false };
 
-    // Al cambiar de modo de permisos hay que relanzar el proceso, porque no
-    // existe comando para cambiarlo en marcha. Reanudando la conversacion el
-    // usuario no pierde el hilo por un ajuste.
-    if (this.reanudar) args.push('--continue');
-
-    if (this.useSystemPromptFile && fs.existsSync(promptPath)) {
-      args.push('--append-system-prompt-file', promptPath);
-    } else {
-      let text = '';
-      try {
-        text = fs.readFileSync(promptPath, 'utf8');
-      } catch (e) {
-        text = '';
-      }
-      if (text) args.push('--append-system-prompt', text);
-    }
-
-    return args;
+    config.save({ orchestrator: otro.id });
+    return { orq: otro, bin: binDe(otro, cfg), cambiado: true, desde: elegido };
   }
 
   start() {
     if (this.proc) this.stop();
 
     const cfg = config.load();
-    const bin = locate(cfg.claudePath);
+    const { orq, bin, cambiado, desde } = this.resolverOrquestador(cfg);
 
     if (!bin) {
+      const todos = Object.values(ORQUESTADORES);
       this.emit('session:error', {
+        noInstalado: true,
         message:
-          'No encuentro Claude Code. Instalalo con "npm i -g @anthropic-ai/claude-code" ' +
-          'o indica su ruta en Ajustes.'
+          'No encuentro ' + orq.label + ' en este equipo. GCenter usa el orquestador que tengas instalado, ' +
+          'con tu propia cuenta. Instala uno de estos y vuelve a abrir la sesion (Ctrl+Shift+R):\r\n' +
+          todos.map((o) => '    ' + o.label + ':  ' + o.install).join('\r\n')
       });
       return false;
     }
 
-    const cwd = cfg.cwd && fs.existsSync(cfg.cwd) ? cfg.cwd : require('os').homedir();
-    writeMcpConfig(this.busPort, this.busToken, cwd);
+    if (cambiado) {
+      this.emit('session:data',
+        '\x1b[38;5;245m[GCenter] ' + desde.label + ' no esta instalado; uso ' + orq.label + '.\x1b[0m\r\n');
+    }
 
-    const env = Object.assign({}, process.env, {
-      // Que Claude no herede el modo "ejecutar como node" de Electron
-      ELECTRON_RUN_AS_NODE: undefined,
-      FORCE_COLOR: '3',
-      TERM: 'xterm-256color',
-      // Un lote de agentes en paralelo puede tardar mas que el tope por
-      // defecto de las herramientas MCP, y Claude lo cortaria a medias
-      MCP_TIMEOUT: '30000',
-      MCP_TOOL_TIMEOUT: '300000',
-      // Claude Code "difiere" las herramientas MCP cuando hay muchas: solo ve
-      // sus nombres y tiene que buscarlas antes de usarlas. En la practica eso
-      // significaba que ni se acordaba de que existian los agentes y se ponia
-      // a escribir el solo. Desactivandolo, las herramientas de delegacion
-      // estan a la vista desde el primer mensaje.
-      ENABLE_TOOL_SEARCH: 'false'
+    const cwd = cfg.cwd && fs.existsSync(cfg.cwd) ? cfg.cwd : os.homedir();
+    const prep = orq.preparar({
+      cfg: config.load(),
+      cwd,
+      busPort: this.busPort,
+      busToken: this.busToken,
+      reanudar: this.reanudar,
+      promptEnLinea: this.promptEnLinea
     });
-    delete env.ELECTRON_RUN_AS_NODE;
-    for (const k of Object.keys(env)) {
-      if (HERENCIA_DE_SESION.some((re) => re.test(k))) delete env[k];
+
+    if (prep.aviso) {
+      this.emit('session:data', '\x1b[38;5;245m[GCenter] ' + prep.aviso + '\x1b[0m\r\n');
+    }
+
+    // En Windows un .cmd (el envoltorio que crea npm) no se puede lanzar
+    // directamente desde un pseudo-terminal: hay que pasar por cmd.exe
+    let file = bin;
+    let args = prep.args;
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin)) {
+      file = process.env.ComSpec || 'cmd.exe';
+      args = ['/d', '/s', '/c', bin].concat(prep.args);
     }
 
     let proc;
     try {
-      proc = pty.spawn(bin, this.buildArgs(cfg), {
+      proc = pty.spawn(file, args, {
         name: 'xterm-256color',
         cols: this.cols,
         rows: this.rows,
         cwd,
-        env,
+        env: prep.env,
         useConpty: true
       });
     } catch (err) {
-      this.emit('session:error', { message: 'No pude arrancar Claude: ' + err.message });
+      this.emit('session:error', { message: 'No pude arrancar ' + orq.label + ': ' + err.message });
       return false;
     }
 
@@ -227,9 +161,9 @@ class ClaudeSession {
      * Al reiniciar matamos el proceso viejo y arrancamos uno nuevo en el acto,
      * pero el aviso de salida del viejo llega despues, cuando el nuevo ya esta
      * en marcha. Sin esta comprobacion, ese aviso tardio ponia this.proc a null
-     * y se llevaba por delante la referencia al proceso NUEVO: Claude seguia
-     * vivo y pintando, pero el teclado ya no le llegaba, la interfaz decia
-     * "sesion cerrada" y el proceso quedaba huerfano para siempre.
+     * y se llevaba por delante la referencia al proceso NUEVO: el orquestador
+     * seguia vivo y pintando, pero el teclado ya no le llegaba, la interfaz
+     * decia "sesion cerrada" y el proceso quedaba huerfano para siempre.
      */
     proc.onData((data) => {
       // Un proceso sustituido aun puede soltar sus ultimos fotogramas: no deben
@@ -248,22 +182,23 @@ class ClaudeSession {
 
       // Murio al instante y se quejo de la opcion: el binario es antiguo,
       // reintentamos con el prompt en linea
-      const unknownOption = /unknown option|opcion desconocida|error: unknown/i.test(buffer);
-      if (alive < 4000 && exitCode !== 0 && unknownOption && this.useSystemPromptFile && !this.retriedInline) {
-        this.useSystemPromptFile = false;
-        this.retriedInline = true;
+      if (alive < 4000 && exitCode !== 0 && orq.pideReintentoEnLinea(buffer) && !this.reintentoEnLinea) {
+        this.promptEnLinea = true;
+        this.reintentoEnLinea = true;
         this.emit('session:data', '\r\n\x1b[33m[GCenter] Reintentando con prompt en linea...\x1b[0m\r\n');
         this.start();
         return;
       }
 
-      this.emit('session:exit', { exitCode, alive });
+      this.emit('session:exit', { exitCode, alive, orchestrator: orq.label });
     });
 
     this.emit('session:started', {
       bin,
       cwd,
-      model: cfg.model,
+      orchestrator: orq.id,
+      orchestratorLabel: orq.label,
+      model: prep.model,
       pid: proc.pid
     });
     return true;
@@ -286,33 +221,36 @@ class ClaudeSession {
   }
 
   /**
-   * Cambio de modelo en caliente: limpiamos la linea de entrada por si el
-   * usuario estaba escribiendo y mandamos el comando /model.
+   * Cambia un ajuste del orquestador activo: 'model', 'effort' o 'mode'.
+   *
+   * Si el orquestador tiene comando para hacerlo en caliente, se manda. Si
+   * no, se relanza reanudando la conversacion, para que el ajuste no cueste el
+   * contexto. Devuelve `{ hot, running }`.
    */
-  switchModel(model) {
-    config.save({ model });
-    return this.enviarComando('/model ' + model);
+  cambiarAjuste(ajuste, valor) {
+    const cfg = config.load();
+    const orq = this.actual(cfg);
+    config.save(orq.guardar[ajuste](valor));
+
+    const comando = orq.comandoEnCaliente(ajuste, valor);
+    if (comando && this.proc) {
+      this.enviarComando(comando);
+      return { hot: true, running: true };
+    }
+
+    // Sin sesion viva no hay nada que relanzar: el ajuste queda guardado y la
+    // interfaz decide si arrancar una
+    if (!this.proc) return { hot: false, running: false };
+
+    this.relanzar(true);
+    return { hot: false, running: this.running };
   }
 
-  /**
-   * Cambio de esfuerzo en caliente. Volver al automatico no tiene comando
-   * equivalente, asi que en ese caso solo se guarda para el proximo arranque.
-   */
-  switchEffort(effort) {
-    config.save({ effort });
-    if (!effort) return false;
-    return this.enviarComando('/effort ' + effort);
-  }
-
-  /**
-   * Cambia el modo de permisos. Requiere relanzar Claude, pero reanudando la
-   * conversacion en curso para que el cambio no cueste el contexto.
-   */
-  setPermissionMode(mode) {
-    config.save({ permissionMode: mode });
+  /** Para y vuelve a arrancar, opcionalmente retomando la conversacion. */
+  relanzar(reanudar) {
     const habiaConversacion = Boolean(this.proc);
     this.stop();
-    this.reanudar = habiaConversacion;
+    this.reanudar = Boolean(reanudar) && habiaConversacion;
     const ok = this.start();
     this.reanudar = false;
     return ok;
@@ -333,8 +271,8 @@ class ClaudeSession {
     // de salida de este proceso se ignora
     this.proc = null;
 
-    // Claude lanza a su vez el servidor MCP de GCenter. Matar solo a Claude
-    // puede dejar ese hijo vivo, asi que tumbamos el arbol entero.
+    // El orquestador lanza a su vez el servidor MCP de GCenter. Matar solo al
+    // orquestador puede dejar ese hijo vivo, asi que tumbamos el arbol entero.
     if (process.platform === 'win32' && proc.pid) {
       try {
         spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
@@ -345,8 +283,9 @@ class ClaudeSession {
         /* si taskkill no esta, nos quedamos con el kill normal */
       }
     } else if (proc.pid) {
-      // En Linux el pseudo-terminal arranca a Claude como lider de su propio
-      // grupo de procesos, asi que un pid negativo alcanza a todo el grupo
+      // En Linux y macOS el pseudo-terminal arranca al orquestador como lider
+      // de su propio grupo de procesos, asi que un pid negativo alcanza a todo
+      // el grupo
       try {
         process.kill(-proc.pid, 'SIGTERM');
       } catch (e) {
@@ -362,4 +301,4 @@ class ClaudeSession {
   }
 }
 
-module.exports = { ClaudeSession };
+module.exports = { Session, ORQUESTADORES, orquestador, binDe, instalados };

@@ -4,23 +4,17 @@
 
 const api = window.gcenter;
 
-/* Modelos de Claude Code que pueden hacer de jefe. Se usan los alias, que
-   siempre apuntan a la ultima version de cada familia. */
-/* Los ids son los alias, que Claude Code resuelve siempre a la ultima version
-   de cada familia: lo que hay que mantener al dia son solo los nombres
-   visibles. Versiones vigentes comprobadas en el propio binario de Claude Code. */
-const CLAUDE_MODELS = [
-  { id: 'opus',   name: 'Opus 5.5',   tag: 'maximo criterio' },
-  { id: 'sonnet', name: 'Sonnet 5.5', tag: 'equilibrado' },
-  { id: 'fable',  name: 'Fable 5.1',  tag: 'creativo' },
-  { id: 'haiku',  name: 'Haiku 4.5',  tag: 'rapido y barato' }
-];
-
 const $ = (id) => document.getElementById(id);
 
 const state = {
   cfg: null,
-  providers: [],
+  // Orquestador activo con sus modelos, modos y esfuerzos (lo da el proceso
+  // principal: los de Claude son fijos, los de OpenCode salen de cada equipo)
+  orq: null,
+  // Etiqueta de la sesion viva ("claude code activo", "opencode activo")
+  sessionLabel: 'sesion activa',
+  // Agentes que el usuario ha configurado (sin sus llaves)
+  agents: [],
   // Los agentes se agrupan por proveedor: un lote paralelo de OpenRouter con
   // dos modelos es UNA tarjeta desplegable, no dos tarjetas repetidas.
   groups: new Map(),      // clave -> ficha del grupo
@@ -98,7 +92,7 @@ const TEMAS = {
 };
 
 const term = new Terminal({
-  fontFamily: '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace',
+  fontFamily: '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "SF Mono", Menlo, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace',
   fontSize: 13.5,
   lineHeight: 1.25,
   letterSpacing: 0,
@@ -130,7 +124,8 @@ window.addEventListener('resize', fit);
 
 term.onData((d) => api.session.write(d));
 
-/* Atajos propios de GCenter. Todo lo demas se lo lleva Claude tal cual. */
+/* Atajos propios de GCenter. Todo lo demas se lo lleva el orquestador tal
+   cual. En macOS, Cmd+C y Cmd+V los da el menu de la aplicacion. */
 term.attachCustomKeyEventHandler((ev) => {
   if (ev.type !== 'keydown') return true;
 
@@ -163,16 +158,16 @@ function setSessionState(kind, label) {
 
 /**
  * Devuelve el teclado al terminal. Al pulsar cualquier control del panel
- * lateral el foco se quedaba en el, y lo que se escribia despues no llegaba a
- * Claude: parecia que el terminal se habia colgado.
+ * lateral el foco se quedaba en el, y lo que se escribia despues no llegaba al
+ * orquestador: parecia que el terminal se habia colgado.
  */
 function volverAlTerminal() {
   setTimeout(() => term.focus(), 0);
 }
 
 async function restartSession() {
-  // Limpiamos antes de arrancar la sesion nueva: la interfaz de Claude se
-  // dibuja posicionando el cursor, y si quedan restos de la anterior se mezclan
+  // Limpiamos antes de arrancar la sesion nueva: la interfaz del orquestador
+  // se dibuja posicionando el cursor, y si quedan restos de la anterior se mezclan
   // los dos fotogramas en un amasijo ilegible
   term.reset();
   term.writeln('\x1b[38;5;245m── sesion reiniciada en ' + (state.cfg ? state.cfg.cwd : '') + ' ──\x1b[0m\r\n');
@@ -185,16 +180,22 @@ async function restartSession() {
 api.on('session:data', (d) => term.write(d));
 
 api.on('session:started', (info) => {
-  setSessionState('on', 'claude activo');
+  state.sessionLabel = info.orchestratorLabel.toLowerCase() + ' activo';
+  setSessionState('on', state.sessionLabel);
+  $('sbOrq').textContent = info.orchestratorLabel.toUpperCase();
   $('sbModel').textContent = info.model;
   $('sbCwd').textContent = info.cwd;
+  // Si el proceso principal cambio de orquestador por su cuenta (el elegido no
+  // estaba instalado), el panel tiene que reflejarlo
+  if (state.orq && state.orq.active !== info.orchestrator) cargarOrquestador();
   setTimeout(fit, 200);
 });
 
-api.on('session:exit', ({ exitCode }) => {
+api.on('session:exit', ({ exitCode, orchestrator }) => {
   setSessionState('off', 'sesion cerrada');
   term.writeln(
-    '\r\n\x1b[38;5;245m── la sesion de Claude termino (codigo ' + exitCode + ') ──\x1b[0m'
+    '\r\n\x1b[38;5;245m── la sesion de ' + (orchestrator || 'el orquestador') +
+      ' termino (codigo ' + exitCode + ') ──\x1b[0m'
   );
   term.writeln('\x1b[38;5;245m   Ctrl+Shift+R para arrancar otra.\x1b[0m\r\n');
 });
@@ -204,15 +205,123 @@ api.on('session:error', ({ message }) => {
   term.writeln('\r\n\x1b[91m[GCenter] ' + message + '\x1b[0m\r\n');
 });
 
+/* ─────────────────────────── Orquestador ───────────────────────────── */
+
+/** Pide al proceso principal el estado del orquestador y repinta el panel. */
+async function cargarOrquestador() {
+  state.orq = await api.orchestrator.info();
+  renderOrquestador();
+}
+
+function renderOrquestador() {
+  const o = state.orq;
+  if (!o) return;
+
+  // Botones Claude Code | OpenCode, marcando los que no estan instalados
+  for (const btn of document.querySelectorAll('.orq-opt')) {
+    const info = o.orchestrators.find((x) => x.id === btn.dataset.orq);
+    btn.classList.toggle('active', btn.dataset.orq === o.active);
+    btn.classList.toggle('missing', !info || !info.installed);
+    btn.title = info && info.installed
+      ? info.label + ' (' + info.path + ')'
+      : (info ? info.label : '') + ' no esta instalado';
+  }
+
+  const activo = o.orchestrators.find((x) => x.id === o.active);
+  const nota = $('orqNote');
+  if (activo && !activo.installed) {
+    nota.innerHTML = '';
+    nota.append('No esta instalado. Instalalo con ');
+    const code = document.createElement('code');
+    code.textContent = activo.install;
+    nota.append(code, ' y reinicia la sesion.');
+    nota.hidden = false;
+  } else if (o.active === 'opencode' && o.freeOnly) {
+    nota.textContent = 'Filtro de gratuidad activo: solo modelos gratuitos de OpenCode.';
+    nota.hidden = false;
+  } else {
+    nota.hidden = true;
+  }
+
+  renderModels();
+
+  // Esfuerzo: solo Claude Code lo tiene
+  $('effortRow').hidden = !o.efforts;
+  if (o.efforts) {
+    llenarSelect($('effortSel'), o.efforts.map((e) => ({ value: e.id, text: e.label })), o.current.effort);
+  }
+
+  llenarSelect($('modeSel'), o.modes.map((m) => ({ value: m.id, text: m.label, title: m.desc })), o.current.mode);
+  $('sbOrq').textContent = o.label.toUpperCase();
+}
+
+function llenarSelect(sel, opciones, valor) {
+  sel.innerHTML = '';
+  for (const op of opciones) {
+    const el = document.createElement('option');
+    el.value = op.value;
+    el.textContent = op.text;
+    if (op.title) el.title = op.title;
+    sel.appendChild(el);
+  }
+  sel.value = valor;
+}
+
+for (const btn of document.querySelectorAll('.orq-opt')) {
+  btn.addEventListener('click', async () => {
+    const id = btn.dataset.orq;
+    if (!state.orq || id === state.orq.active) return;
+
+    const info = state.orq.orchestrators.find((x) => x.id === id);
+    if (info && !info.installed) {
+      term.writeln('\r\n\x1b[38;5;209m[GCenter]\x1b[0m ' + info.label + ' no esta instalado en este equipo.');
+      term.writeln('\x1b[38;5;245m   Instalalo con: \x1b[0m' + info.install +
+        '\x1b[38;5;245m y vuelve a elegirlo.\x1b[0m\r\n');
+      volverAlTerminal();
+      return;
+    }
+
+    // Cambiar de orquestador empieza una conversacion nueva: mejor avisar
+    const { running } = await api.session.status();
+    if (running && !window.confirm(
+      'Cambiar a ' + info.label + ' empieza una conversacion nueva: no se puede continuar la actual ' +
+      'en otro orquestador. ¿Seguir?'
+    )) {
+      volverAlTerminal();
+      return;
+    }
+
+    term.reset();
+    term.writeln('\x1b[38;5;245m── orquestador: ' + info.label + ' · ' + info.login + ' ──\x1b[0m\r\n');
+    setSessionState('busy', 'arrancando ' + info.label.toLowerCase());
+    await api.orchestrator.set(id);
+    await cargarOrquestador();
+    setTimeout(fit, 260);
+    volverAlTerminal();
+  });
+}
+
 /* ───────────────────────── Selector de modelo ──────────────────────── */
 
 function renderModels() {
   const host = $('modelList');
   host.innerHTML = '';
+  const o = state.orq;
 
-  for (const m of CLAUDE_MODELS) {
+  if (!o.models.length) {
+    const p = document.createElement('p');
+    p.className = 'empty-note empty-tight';
+    p.textContent = o.orchestrators.find((x) => x.id === o.active).installed
+      ? 'Sin modelos disponibles. Conecta un proveedor en el propio orquestador.'
+      : 'Instala el orquestador para ver sus modelos.';
+    host.appendChild(p);
+    return;
+  }
+
+  for (const m of o.models) {
     const el = document.createElement('div');
-    el.className = 'model-item' + (m.id === state.cfg.model ? ' active' : '');
+    el.className = 'model-item' + (m.id === o.current.model ? ' active' : '');
+    el.title = m.id;
     el.innerHTML =
       '<span class="model-radio"></span>' +
       '<span class="model-name"></span>' +
@@ -221,14 +330,24 @@ function renderModels() {
     el.querySelector('.model-tag').textContent = m.tag;
 
     el.addEventListener('click', async () => {
-      state.cfg.model = m.id;
+      if (m.id === o.current.model) return;
+      o.current.model = m.id;
       renderModels();
       $('sbModel').textContent = m.id;
+
+      // Claude Code lo cambia en caliente con /model; OpenCode se relanza
+      // retomando la conversacion, y hay que limpiar la pantalla antes para
+      // que no se mezclen los dos fotogramas
+      if (o.active !== 'claude') {
+        term.reset();
+        term.writeln('\x1b[38;5;245m── modelo: ' + m.id + ' (se retoma la conversacion) ──\x1b[0m\r\n');
+      }
 
       const res = await api.session.setModel(m.id);
       // Si no hay sesion, elegir modelo es la senal mas clara de que se quiere
       // trabajar: arrancamos una con ese modelo en vez de solo apuntarlo
       if (!res.running) await restartSession();
+      setTimeout(fit, 260);
       volverAlTerminal();
     });
 
@@ -247,7 +366,7 @@ function updateAgentCount() {
     state.activeCount + (state.activeCount === 1 ? ' activo' : ' activos');
   $('sbAgents').textContent = state.activeCount;
   if (state.activeCount > 0) setSessionState('busy', state.activeCount + ' agentes trabajando');
-  else if ($('sessionDot').className.includes('busy')) setSessionState('on', 'claude activo');
+  else if ($('sessionDot').className.includes('busy')) setSessionState('on', state.sessionLabel);
 }
 
 /** Crea la tarjeta de un grupo y la coloca arriba del panel. */
@@ -488,7 +607,7 @@ function agentDone(ev) {
   });
 }
 
-/** Pinta el estado de salud de cada proveedor en el panel EQUIPO. */
+/** Pinta el estado de salud de cada agente en el panel EQUIPO. */
 function renderHealth(filas) {
   const host = $('healthList');
   const utiles = filas.filter((f) => f.ok + f.fallos > 0);
@@ -496,13 +615,13 @@ function renderHealth(filas) {
 
   host.innerHTML = '';
   for (const f of utiles) {
-    const p = state.providers.find((x) => x.id === f.providerId);
+    const p = state.agents.find((x) => x.id === f.providerId);
     const row = document.createElement('div');
     row.className = 'health-row health-' + f.nivel;
     row.innerHTML = '<span class="health-dot"></span>' +
       '<span class="health-name"></span><span class="health-meta"></span>';
 
-    row.querySelector('.health-name').textContent = p ? p.label : f.providerId;
+    row.querySelector('.health-name').textContent = p ? p.name : f.providerId;
 
     let meta = f.fiabilidad + '% · ' + f.ok + '/' + (f.ok + f.fallos);
     if (f.nivel === 'agotado') meta = (f.motivoAgotado || 'agotado') + ' · ' + f.minutosParaReintentar + ' min';
@@ -601,104 +720,209 @@ $('btnRecentDir').addEventListener('click', () => {
   if (!host.hidden) renderRecent();
 });
 
-/* ───────────────────────── Ajustes / API keys ──────────────────────── */
+/* ───────────────────────────── Agentes ─────────────────────────────── */
 
-function renderProviders() {
-  const host = $('providerList');
+/** Texto corto con el resultado de probar un agente. */
+function describirPrueba(r) {
+  if (!r.ok) return { texto: '✕ ' + (r.error || 'no responde'), clase: 'check-err' };
+  if (r.bloqueado) {
+    return {
+      texto: '! responde (' + r.total + ' modelos), pero no publica precios: con el filtro de gratuidad ' +
+        'activo no se usara. Desactiva el filtro si quieres usarlo.',
+      clase: 'check-err'
+    };
+  }
+  const gratis = r.verificable ? r.freeCount + ' gratuitos' : 'gratuidad no verificable';
+  return {
+    texto: '✓ conectado — ' + r.total + ' modelos, ' + gratis + (r.freeOnly ? '' : ' (filtro desactivado: se usan todos)'),
+    clase: 'check-ok'
+  };
+}
+
+function renderAgentsCfg() {
+  const host = $('agentCfgList');
   host.innerHTML = '';
 
-  for (const p of state.providers) {
-    const box = document.createElement('div');
-    box.className = 'provider';
-    box.innerHTML =
-      '<div class="provider-head">' +
-        '<span class="provider-name"></span>' +
+  if (!state.agents.length) {
+    const p = document.createElement('p');
+    p.className = 'empty-note';
+    p.textContent =
+      'Aun no tienes agentes. Sin agentes, el orquestador hace todo el trabajo el mismo. ' +
+      'Anade uno abajo: basta con un nombre y una API key.';
+    host.appendChild(p);
+    return;
+  }
+
+  for (const a of state.agents) {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.innerHTML =
+      '<div class="agent-row-head">' +
+        '<span class="agent-row-name"></span>' +
+        '<span class="agent-row-kind"></span>' +
         '<span class="provider-badge"></span>' +
-        '<a class="provider-link">conseguir llave gratis &rarr;</a>' +
+        '<span class="agent-row-actions">' +
+          '<button class="btn" data-act="check">Probar</button>' +
+          '<button class="btn" data-act="remove">Eliminar</button>' +
+        '</span>' +
       '</div>' +
-      '<p class="provider-meta"></p>' +
-      '<div class="provider-input">' +
-        '<input type="password" spellcheck="false" />' +
-        '<button class="btn">Probar</button>' +
-      '</div>' +
+      '<div class="agent-row-meta"></div>' +
       '<div class="check-result"></div>';
 
-    const nameEl = box.querySelector('.provider-name');
-    nameEl.textContent = p.label;
-    nameEl.style.color = p.color;
+    row.querySelector('.agent-row-name').textContent = a.name;
+    row.querySelector('.agent-row-kind').textContent =
+      a.custom ? a.baseUrl : a.providerLabel;
+    row.querySelector('.agent-row-meta').textContent = 'id: ' + a.id + '   llave: ' + a.key;
 
-    const badge = box.querySelector('.provider-badge');
-    badge.textContent = p.hasKey ? (p.fromEnv ? 'ENV' : 'ACTIVO') : 'SIN LLAVE';
-    badge.className = 'provider-badge ' + (p.hasKey ? 'badge-on' : 'badge-off');
+    const badge = row.querySelector('.provider-badge');
+    badge.textContent = 'SIN VERIFICAR';
+    badge.className = 'provider-badge badge-off';
 
-    box.querySelector('.provider-meta').textContent = p.free + '  —  ' + p.strengths;
-
-    const link = box.querySelector('.provider-link');
-    link.addEventListener('click', () => api.openExternal(p.signupUrl));
-
-    const input = box.querySelector('input');
-    input.placeholder = p.hasKey ? state.cfg.keys[p.id] || 'llave guardada' : p.keyName;
-    input.dataset.provider = p.id;
-
-    const result = box.querySelector('.check-result');
-    box.querySelector('button').addEventListener('click', async () => {
-      const value = input.value.trim();
-      if (value) {
-        await api.config.setKey(p.id, value);
-        input.value = '';
-        input.placeholder = 'llave guardada';
-      }
-
+    const result = row.querySelector('.check-result');
+    const probarAgente = async () => {
       result.textContent = 'comprobando...';
       result.className = 'check-result';
-
-      const res = await api.providers.check(p.id);
-      if (res.ok) {
-        result.textContent = '✓ conectado — ' + res.count + ' modelos disponibles';
-        result.className = 'check-result check-ok';
+      const r = await api.agents.check(a.id);
+      const d = describirPrueba(r);
+      result.textContent = d.texto;
+      result.className = 'check-result ' + d.clase;
+      if (!r.ok) {
+        badge.textContent = /401|llave invalida/i.test(r.error || '') ? 'LLAVE INVALIDA' : 'SIN RESPUESTA';
+        badge.className = 'provider-badge badge-block';
+      } else if (r.bloqueado) {
+        badge.textContent = 'BLOQUEADO';
+        badge.className = 'provider-badge badge-block';
+      } else {
         badge.textContent = 'ACTIVO';
         badge.className = 'provider-badge badge-on';
-      } else {
-        result.textContent = '✕ ' + (res.error || 'no responde');
-        result.className = 'check-result check-err';
       }
+    };
+
+    row.querySelector('[data-act="check"]').addEventListener('click', probarAgente);
+    row.querySelector('[data-act="remove"]').addEventListener('click', async () => {
+      if (!window.confirm('¿Eliminar el agente "' + a.name + '"? Su llave se borra de este equipo.')) return;
+      await api.agents.remove(a.id);
+      state.agents = await api.agents.list();
+      state.cambiosAgentes = true;
+      renderAgentsCfg();
     });
 
-    host.appendChild(box);
+    host.appendChild(row);
+    // Se comprueban solos al abrir: asi se ve de un vistazo cual esta bloqueado
+    probarAgente();
   }
 }
 
+/* Deteccion en vivo mientras se escribe el nombre o la llave */
+let detectTimer = null;
+async function detectarNuevo() {
+  const nombre = $('newName').value;
+  const llave = $('newKey').value;
+  const d = await api.agents.detect(nombre, llave);
+  const det = $('newDetect');
+
+  if (d.kind) {
+    det.innerHTML = '';
+    det.append('Proveedor reconocido: ');
+    const b = document.createElement('b');
+    b.textContent = d.label;
+    det.append(b);
+    $('newUrlRow').hidden = true;
+  } else if (nombre.trim() || llave.trim()) {
+    det.textContent = 'Proveedor no reconocido: indica su URL base (debe ser compatible con OpenAI).';
+    $('newUrlRow').hidden = false;
+  } else {
+    pintarConocidos();
+    $('newUrlRow').hidden = true;
+  }
+}
+
+function pintarConocidos() {
+  const det = $('newDetect');
+  det.innerHTML = '';
+  det.append('Se reconocen solos: ' + (state.plantillas || []).map((p) => p.label).join(', ') + '.');
+}
+
+for (const id of ['newName', 'newKey']) {
+  $(id).addEventListener('input', () => {
+    clearTimeout(detectTimer);
+    detectTimer = setTimeout(detectarNuevo, 150);
+  });
+}
+
+$('agentForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const result = $('newResult');
+  const boton = $('btnAddAgent');
+
+  result.textContent = 'probando la conexion...';
+  result.className = 'check-result';
+  boton.disabled = true;
+
+  const r = await api.agents.add({
+    name: $('newName').value,
+    key: $('newKey').value,
+    baseUrl: $('newUrl').value
+  });
+  boton.disabled = false;
+
+  if (!r.ok) {
+    if (r.needUrl) $('newUrlRow').hidden = false;
+    result.textContent = '✕ ' + r.error;
+    result.className = 'check-result check-err';
+    return;
+  }
+
+  const d = describirPrueba(r);
+  result.textContent = r.agent.name + ' anadido. ' + d.texto;
+  result.className = 'check-result ' + d.clase;
+  $('newName').value = '';
+  $('newKey').value = '';
+  $('newUrl').value = '';
+  $('newUrlRow').hidden = true;
+  pintarConocidos();
+
+  state.agents = await api.agents.list();
+  state.cambiosAgentes = true;
+  renderAgentsCfg();
+});
+
 $('btnSettings').addEventListener('click', async () => {
-  state.providers = await api.providers.list();
-  state.cfg = await api.config.get();
-  renderProviders();
+  const [agents, plantillas, cfg] = await Promise.all([
+    api.agents.list(),
+    api.agents.templates(),
+    api.config.get()
+  ]);
+  state.agents = agents;
+  state.plantillas = plantillas;
+  state.cfg = cfg;
+  state.cambiosAgentes = false;
+
+  renderAgentsCfg();
+  pintarConocidos();
+  $('newResult').textContent = '';
   $('freeOnly').checked = state.cfg.freeOnly !== false;
   $('settingsOverlay').hidden = false;
 });
 
-$('btnCloseSettings').addEventListener('click', () => {
+function cerrarAjustes() {
   $('settingsOverlay').hidden = true;
   volverAlTerminal();
-});
+}
+
+$('btnCloseSettings').addEventListener('click', cerrarAjustes);
 
 $('settingsOverlay').addEventListener('click', (e) => {
-  if (e.target === $('settingsOverlay')) {
-    $('settingsOverlay').hidden = true;
-    volverAlTerminal();
-  }
+  if (e.target === $('settingsOverlay')) cerrarAjustes();
 });
 
 $('btnSaveSettings').addEventListener('click', async () => {
-  // Guardamos cualquier llave escrita que no se haya probado
-  for (const input of document.querySelectorAll('.provider-input input')) {
-    const value = input.value.trim();
-    if (value) await api.config.setKey(input.dataset.provider, value);
-  }
-
   await api.config.set({ freeOnly: $('freeOnly').checked });
   state.cfg = await api.config.get();
 
   $('settingsOverlay').hidden = true;
+  // El filtro cambia los modelos que ofrece OpenCode
+  await cargarOrquestador();
   await restartSession();
 });
 
@@ -717,11 +941,11 @@ $('btnTheme').addEventListener('click', async () => {
   state.cfg.theme = modo;
   await api.config.set({ theme: modo });
 
-  // Claude Code tiene su propio tema y no se entera del nuestro: sus colores
-  // estan pensados para el fondo contrario y quedan deslavados
+  // El orquestador tiene su propio tema y no se entera del nuestro: sus
+  // colores estan pensados para el fondo contrario y quedan deslavados
   term.writeln(
     '\r\n\x1b[38;5;245m[GCenter] modo ' + (modo === 'light' ? 'claro' : 'oscuro') +
-    '. Ejecuta \x1b[0m/theme\x1b[38;5;245m para que Claude Code use el suyo a juego.\x1b[0m'
+    '. Ejecuta \x1b[0m/theme\x1b[38;5;245m para que el orquestador use el suyo a juego.\x1b[0m'
   );
 });
 
@@ -729,43 +953,34 @@ $('btnTheme').addEventListener('click', async () => {
 
 $('effortSel').addEventListener('change', async (e) => {
   const nivel = e.target.value;
-  state.cfg.effort = nivel;
+  state.orq.current.effort = nivel;
 
   const res = await api.session.setEffort(nivel);
 
-  // Sin sesion la arrancamos ya con el esfuerzo nuevo. Y volver al valor por
-  // defecto de Claude no tiene comando en caliente: solo se aplica al relanzar
-  if (!res.running || !nivel) await restartSession();
+  // Sin sesion la arrancamos ya con el esfuerzo nuevo
+  if (!res.running) await restartSession();
+  setTimeout(fit, 260);
   volverAlTerminal();
 });
 
-/* ────────────────────── Modo de permisos de Claude ─────────────────── */
-
-/** Descripciones tomadas literalmente de la ayuda interna de Claude Code. */
-const MODOS = {
-  plan: 'solo planifica, no ejecuta ninguna herramienta',
-  manual: 'pregunta antes de cada accion',
-  dontAsk: 'no pregunta; deniega lo que no este aprobado de antemano',
-  acceptEdits: 'edita archivos sin preguntar',
-  auto: 'un clasificador decide que aprobar y que denegar',
-  bypassPermissions: 'se salta todas las comprobaciones de permisos'
-};
+/* ───────────────────────────── Modo ────────────────────────────────── */
 
 $('modeSel').addEventListener('change', async (e) => {
   const modo = e.target.value;
-  state.cfg.permissionMode = modo;
+  const info = state.orq.modes.find((m) => m.id === modo);
+  state.orq.current.mode = modo;
 
-  // No hay comando para cambiarlo en caliente (solo shift+tab, que cicla y se
-  // desincronizaria), asi que se reinicia la sesion reanudando la conversacion.
-  // Se limpia la pantalla igual que en cualquier reinicio: si no, los restos
-  // de la interfaz anterior se mezclan con la nueva.
+  // Ninguno de los dos orquestadores deja cambiarlo en caliente, asi que se
+  // relanza reanudando la conversacion. Se limpia la pantalla igual que en
+  // cualquier reinicio: si no, los restos de la interfaz anterior se mezclan
+  // con la nueva.
   term.reset();
   term.writeln(
-    '\x1b[38;5;245m── modo ' + e.target.options[e.target.selectedIndex].text.toLowerCase() +
-    ': ' + MODOS[modo] + ' ──\x1b[0m\r\n'
+    '\x1b[38;5;245m── modo ' + info.label.toLowerCase() + ': ' + info.desc + ' ──\x1b[0m\r\n'
   );
   setSessionState('busy', 'cambiando de modo');
-  await api.session.setPermissionMode(modo);
+  const res = await api.session.setMode(modo);
+  if (!res.running) await restartSession();
   setTimeout(fit, 260);
   volverAlTerminal();
 });
@@ -777,7 +992,7 @@ $('modeSel').addEventListener('change', async (e) => {
 // se elige) y el engranaje (abre el modal, cuyos campos lo necesitan).
 for (const zona of [document.querySelector('.sidebar'), document.querySelector('.titlebar')]) {
   zona.addEventListener('click', (e) => {
-    if (e.target.closest('select, input, #btnSettings')) return;
+    if (e.target.closest('select, input, #btnSettings, .orq-opt')) return;
     volverAlTerminal();
   });
 }
@@ -795,45 +1010,40 @@ async function boot() {
   // ventana deje de parecer vacia mientras llega la configuracion
   banner([
     '',
-    '  \x1b[1;97mG\x1b[0m\x1b[1;38;5;209mCENTER\x1b[0m  \x1b[38;5;240mv1.0\x1b[0m',
-    '  \x1b[38;5;245mClaude Code dirige, revisa y toma el relevo.\x1b[0m',
-    '  \x1b[38;5;245mLos agentes gratuitos ejecutan.\x1b[0m',
+    '  \x1b[1;97mG\x1b[0m\x1b[1;38;5;209mCENTER\x1b[0m  \x1b[38;5;240mv2.0\x1b[0m',
+    '  \x1b[38;5;245mEl orquestador dirige, revisa y toma el relevo.\x1b[0m',
+    '  \x1b[38;5;245mTus agentes ejecutan.\x1b[0m',
     ''
   ]);
   term.focus();
 
-  // Config y proveedores van en paralelo; en cuanto llega la config ya se
-  // puede lanzar Claude, sin esperar al listado de proveedores
-  const [cfg, provs] = await Promise.all([api.config.get(), api.providers.list()]);
+  // Config y agentes van en paralelo; el panel del orquestador se pinta en
+  // cuanto llega, sin esperar a que OpenCode liste sus modelos
+  const [cfg, agents] = await Promise.all([api.config.get(), api.agents.list()]);
   state.cfg = cfg;
-  state.providers = provs;
+  state.agents = agents;
 
   aplicarTema(cfg.theme);
-  $('effortSel').value = cfg.effort || '';
-  $('modeSel').value = cfg.permissionMode || 'acceptEdits';
-  renderModels();
   renderCwd();
   renderStats(state.stats);
 
-  const active = state.providers.filter((p) => p.hasKey);
-
-  if (active.length) {
+  if (agents.length) {
     term.writeln(
-      '  \x1b[38;5;245mEquipo disponible:\x1b[0m \x1b[97m' +
-        active.map((p) => p.label).join('\x1b[0m, \x1b[97m') + '\x1b[0m'
+      '  \x1b[38;5;245mAgentes:\x1b[0m \x1b[97m' +
+        agents.map((a) => a.name).join('\x1b[0m, \x1b[97m') + '\x1b[0m' +
+        (cfg.freeOnly !== false ? '  \x1b[38;5;245m(solo modelos gratuitos)\x1b[0m' : '')
     );
   } else {
-    term.writeln('  \x1b[38;5;209m!\x1b[0m Ningun agente gratuito configurado todavia.');
+    term.writeln('  \x1b[38;5;209m!\x1b[0m Aun no tienes agentes: el orquestador hara el trabajo el mismo.');
     term.writeln(
-      '    \x1b[38;5;245mPulsa el engranaje del panel derecho y pega al menos una API key.\x1b[0m'
+      '    \x1b[38;5;245mPulsa el engranaje del panel derecho y anade uno con un nombre y una API key.\x1b[0m'
     );
-    term.writeln('    \x1b[38;5;245mRecomendado para empezar: Groq (gratis, sin tarjeta, instantaneo).\x1b[0m');
   }
   term.writeln('');
 
-  setSessionState('busy', 'arrancando claude');
-  const ok = await api.session.start();
-  if (!ok) setSessionState('err', 'error');
+  setSessionState('busy', 'arrancando');
+  const [ok] = await Promise.all([api.session.start(), cargarOrquestador()]);
+  if (!ok) setSessionState('err', 'sin orquestador');
 
   setTimeout(fit, 300);
   term.focus();

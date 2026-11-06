@@ -38,7 +38,7 @@
       <div id="term" class="term"></div>
 
       <footer class="statusbar">
-        <span class="sb-item"><span class="sb-key">MODELO</span> <b id="sbModel">opus</b></span>
+        <span class="sb-item"><span class="sb-key" id="sbOrq">ORQUESTADOR</span> <b id="sbModel">-</b></span>
         <span class="sb-sep"></span>
         <span class="sb-item"><span class="sb-key">DIR</span> <b id="sbCwd">-</b></span>
         <span class="sb-sep"></span>
@@ -51,37 +51,29 @@
     <!-- ─────────────────────────── Sidebar ──────────────────────────── -->
     <aside class="sidebar">
 
-      <!-- Modelo de Claude Code (el jefe) -->
+      <!-- Orquestador: Claude Code u OpenCode, con la cuenta del propio usuario -->
       <section class="panel">
         <h2 class="panel-title">
-          <span class="bullet bullet-cyan"></span>MODELO JEFE
-          <button id="btnSettings" class="mini-btn" title="Ajustes y API keys">&#9881;</button>
+          <span class="bullet bullet-cyan"></span>ORQUESTADOR
+          <button id="btnSettings" class="mini-btn" title="Agentes y API keys">&#9881;</button>
         </h2>
+
+        <div class="orq-switch" id="orqSwitch" role="tablist">
+          <button class="orq-opt" data-orq="claude" role="tab">Claude Code</button>
+          <button class="orq-opt" data-orq="opencode" role="tab">OpenCode</button>
+        </div>
+        <p class="orq-note" id="orqNote" hidden></p>
+
         <div id="modelList" class="model-list"></div>
 
-        <label class="ctrl-row">
+        <label class="ctrl-row" id="effortRow">
           <span>Esfuerzo</span>
-          <select id="effortSel">
-            <option value="">Por defecto de Claude</option>
-            <option value="low">Bajo</option>
-            <option value="medium">Medio</option>
-            <option value="high">Alto</option>
-            <option value="xhigh">Muy alto</option>
-            <option value="max">Maximo</option>
-          </select>
+          <select id="effortSel"></select>
         </label>
 
         <label class="ctrl-row">
           <span>Modo</span>
-          <!-- Ordenados de menos a mas permisivo, igual que los ordena Claude -->
-          <select id="modeSel">
-            <option value="plan">Plan</option>
-            <option value="manual">Manual</option>
-            <option value="dontAsk">No preguntar</option>
-            <option value="acceptEdits">Edicion automatica</option>
-            <option value="auto">Auto</option>
-            <option value="bypassPermissions">Sin restricciones</option>
-          </select>
+          <select id="modeSel"></select>
         </label>
       </section>
 
@@ -94,7 +86,7 @@
         <div id="agentList" class="agent-list">
           <p class="empty-note">
             Sin actividad todavia.<br />
-            Pidele algo a Claude y delegara aqui.
+            Pidele algo al orquestador y delegara aqui.
           </p>
         </div>
       </section>
@@ -127,38 +119,56 @@
           <button id="btnRecentDir" class="btn" title="Carpetas recientes">&#9662;</button>
         </div>
         <div id="recentList" class="recent-list" hidden></div>
-        <p class="cwd-note">Claude ejecutara aqui todas las peticiones.</p>
+        <p class="cwd-note">El orquestador trabajara aqui en todas las peticiones.</p>
       </section>
 
     </aside>
   </div>
 
-  <!-- ───────────────────── Modal de ajustes / API keys ───────────────── -->
+  <!-- ───────────────────────── Modal de agentes ────────────────────────── -->
   <div id="settingsOverlay" class="overlay" hidden>
     <div class="modal">
       <header class="modal-head">
-        <h3>Agentes gratuitos</h3>
+        <h3>Agentes</h3>
         <button id="btnCloseSettings" class="mini-btn">&#10005;</button>
       </header>
 
       <p class="modal-intro">
-        Cada proveedor de abajo es gratuito. Pega su API key y Claude podra delegarle trabajo.
-        Con uno solo ya funciona, pero cuantos mas actives, mejor podra repartir segun la tarea.
+        Los agentes son modelos de IA a los que el orquestador delega trabajo para gastar menos.
+        Anade los tuyos con un nombre y una API key de tu cuenta: las llaves solo se guardan en este equipo.
       </p>
 
-      <div id="providerList" class="provider-list"></div>
+      <div id="agentCfgList" class="provider-list"></div>
+
+      <form class="agent-form" id="agentForm" autocomplete="off">
+        <div class="agent-form-title">Anadir agente</div>
+        <div class="agent-form-row">
+          <input id="newName" type="text" spellcheck="false" placeholder="Nombre (p. ej. Groq)" />
+          <input id="newKey" type="password" spellcheck="false" placeholder="API key" />
+        </div>
+        <div class="agent-form-row" id="newUrlRow" hidden>
+          <input id="newUrl" type="text" spellcheck="false"
+                 placeholder="URL base compatible con OpenAI (p. ej. https://api.ejemplo.com/v1)" />
+        </div>
+        <div class="agent-form-row agent-form-foot">
+          <span class="agent-detect" id="newDetect">Se reconocen solos: <span id="knownList"></span></span>
+          <button type="submit" class="btn btn-primary" id="btnAddAgent">Anadir</button>
+        </div>
+        <div class="check-result" id="newResult"></div>
+      </form>
 
       <label class="guard" id="freeOnlyRow">
         <input type="checkbox" id="freeOnly" checked />
         <span class="guard-text">
           <b>Solo modelos gratuitos</b>
-          Rechaza cualquier modelo que cobre por token <em>antes</em> de llamar al proveedor.
-          Desactivalo solo si has anadido saldo a proposito.
+          Se aplica a todos los agentes: rechaza cualquier modelo que cobre por token <em>antes</em> de
+          llamar al proveedor, y aparta a los agentes cuya gratuidad no se puede comprobar. En OpenCode,
+          limita el selector a sus modelos gratuitos. Desactivalo solo si quieres usar modelos de pago.
         </span>
       </label>
 
       <footer class="modal-foot">
-        <span class="foot-note">El modo de permisos se cambia desde el panel lateral.</span>
+        <span class="foot-note">Los cambios se aplican al reiniciar la sesion.</span>
         <button id="btnSaveSettings" class="btn btn-primary">Guardar y reiniciar sesion</button>
       </footer>
     </div>

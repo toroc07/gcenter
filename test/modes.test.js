@@ -12,10 +12,10 @@
 
 const pty = require('@lydell/node-pty');
 const path = require('path');
-const { locate } = require('../src/main/claude-locator');
+const { locate } = require('../src/main/locator');
 
 const MODOS = ['manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
-const bin = locate();
+const bin = locate('claude');
 
 function probar(modo) {
   return new Promise((resolve) => {
